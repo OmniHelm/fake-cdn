@@ -147,7 +147,14 @@ check_python() {
 setup_venv() {
     info "配置虚拟环境..."
 
-    if [ ! -d "venv" ]; then
+    # 检查 venv 是否完整（存在 activate 脚本）
+    if [ ! -f "venv/bin/activate" ]; then
+        # 清理可能存在的不完整 venv 目录
+        if [ -d "venv" ]; then
+            warn "发现不完整的虚拟环境，正在清理..."
+            rm -rf venv
+        fi
+
         info "创建虚拟环境..."
 
         # 尝试创建虚拟环境
