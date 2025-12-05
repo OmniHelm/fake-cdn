@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/depl
 - 安装依赖
 - 显示交互式菜单
 
-> 自定义安装目录: `FAKE_CDN_DIR=/opt/fake-cdn curl -fsSL ... | bash`
+> 默认安装到当前目录下的 `fake-cdn/`，可通过 `FAKE_CDN_DIR` 环境变量指定其他位置
 
 ### 选择运行模式
 

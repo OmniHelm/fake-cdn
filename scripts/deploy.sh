@@ -22,7 +22,8 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # 仓库地址
 REPO_URL="https://github.com/OmniHelm/fake-cdn.git"
-INSTALL_DIR="${FAKE_CDN_DIR:-$HOME/fake-cdn}"
+# 默认安装到当前目录下的 fake-cdn，可通过 FAKE_CDN_DIR 环境变量覆盖
+INSTALL_DIR="${FAKE_CDN_DIR:-$(pwd)/fake-cdn}"
 
 # 判断是否通过管道运行 (curl | bash)
 if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "bash" ]; then
