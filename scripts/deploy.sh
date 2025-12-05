@@ -493,26 +493,35 @@ Percentile95Validator.print_report(result)
             ;;
         8|stop)
             PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
-
-            if [ ! -f "$PID_FILE" ]; then
-                warn "没有运行中的服务"
-                return 0
-            fi
-
             info "停止服务..."
-            source "$PID_FILE"
 
-            if [ -n "$DASHBOARD_PID" ] && kill -0 $DASHBOARD_PID 2>/dev/null; then
-                kill $DASHBOARD_PID 2>/dev/null
-                success "仪表板已停止 (PID: $DASHBOARD_PID)"
+            # 从 PID 文件停止
+            if [ -f "$PID_FILE" ]; then
+                source "$PID_FILE"
+
+                if [ -n "$DASHBOARD_PID" ] && kill -0 $DASHBOARD_PID 2>/dev/null; then
+                    kill $DASHBOARD_PID 2>/dev/null
+                    success "仪表板已停止 (PID: $DASHBOARD_PID)"
+                fi
+
+                if [ -n "$REALTIME_PID" ] && kill -0 $REALTIME_PID 2>/dev/null; then
+                    kill $REALTIME_PID 2>/dev/null
+                    success "实时推送已停止 (PID: $REALTIME_PID)"
+                fi
+
+                rm -f "$PID_FILE"
             fi
 
-            if [ -n "$REALTIME_PID" ] && kill -0 $REALTIME_PID 2>/dev/null; then
-                kill $REALTIME_PID 2>/dev/null
-                success "实时推送已停止 (PID: $REALTIME_PID)"
+            # 清理占用端口 8050 的进程 (dashboard)
+            PORT_PID=$(lsof -ti:8050 2>/dev/null || true)
+            if [ -n "$PORT_PID" ]; then
+                kill $PORT_PID 2>/dev/null
+                success "清理端口 8050 占用进程 (PID: $PORT_PID)"
             fi
 
-            rm -f "$PID_FILE"
+            # 清理 fake_cdn 相关进程
+            pkill -f "fake_cdn" 2>/dev/null && success "清理 fake_cdn 相关进程" || true
+
             success "所有服务已停止"
             ;;
         0|exit)
