@@ -1,6 +1,8 @@
 #!/bin/bash
 # Fake CDN 一键部署脚本
-# 用途: 快速部署和启动 CDN 日志模拟系统
+# 用法:
+#   一键安装: curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/deploy.sh | bash
+#   本地运行: ./scripts/deploy.sh [模式]
 
 set -e
 
@@ -12,16 +14,61 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 项目目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-cd "$PROJECT_ROOT"
-
 # 打印带颜色的消息
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# 仓库地址
+REPO_URL="https://github.com/OmniHelm/fake-cdn.git"
+INSTALL_DIR="${FAKE_CDN_DIR:-$HOME/fake-cdn}"
+
+# 判断是否通过管道运行 (curl | bash)
+if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "bash" ]; then
+    # 通过管道运行，需要先克隆项目
+    REMOTE_INSTALL=true
+else
+    # 本地文件运行
+    REMOTE_INSTALL=false
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+fi
+
+# 远程安装: 克隆项目
+clone_repo() {
+    echo ""
+    info "检查 git..."
+    if ! command -v git &> /dev/null; then
+        error "未找到 git，请先安装 git"
+    fi
+    success "git 已安装"
+
+    if [ -d "$INSTALL_DIR" ]; then
+        warn "目录已存在: $INSTALL_DIR"
+        echo -n "是否删除并重新安装? (y/N): "
+        read -r confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            rm -rf "$INSTALL_DIR"
+        else
+            info "使用现有目录"
+            PROJECT_ROOT="$INSTALL_DIR"
+            return 0
+        fi
+    fi
+
+    info "克隆仓库到 $INSTALL_DIR ..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
+    success "克隆完成"
+    PROJECT_ROOT="$INSTALL_DIR"
+}
+
+# 如果是远程安装，先克隆
+if [ "$REMOTE_INSTALL" = true ]; then
+    clone_repo
+fi
+
+cd "$PROJECT_ROOT"
 
 # 分隔线
 separator() {
@@ -56,6 +103,8 @@ show_help() {
     echo "  validate      验证已生成的日志"
     echo "  dashboard     启动可视化仪表板"
     echo "  status        查看数据状态"
+    echo "  full          完整模式 (realtime + dashboard 后台启动)"
+    echo "  stop          停止后台服务"
     echo ""
     echo "选项:"
     echo "  -h, --help    显示帮助信息"
@@ -69,6 +118,8 @@ show_help() {
     echo "  $0                    # 交互式菜单"
     echo "  $0 simulation         # 直接运行模拟模式"
     echo "  $0 dashboard          # 启动仪表板"
+    echo "  $0 full               # 后台启动 realtime + dashboard"
+    echo "  $0 stop               # 停止后台服务"
     echo "  $0 --skip-deps status # 跳过依赖安装，查看状态"
     exit 0
 }
@@ -211,6 +262,8 @@ show_menu() {
     echo "  4) validate    - 验证模式 (验证生成的日志)"
     echo "  5) dashboard   - 启动仪表板 (可视化监控)"
     echo "  6) status      - 查看状态"
+    echo -e "  ${CYAN}7) full         - 完整模式 (realtime + dashboard 后台启动)${NC}"
+    echo -e "  ${RED}8) stop         - 停止后台服务${NC}"
     echo "  0) exit        - 退出"
     echo ""
 }
@@ -263,6 +316,83 @@ Percentile95Validator.print_report(result)
         6|status)
             show_status
             check_push_config
+            ;;
+        7|full)
+            info "启动完整模式 (realtime + dashboard)..."
+            echo ""
+
+            # PID 文件
+            PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
+
+            # 检查是否已有服务在运行
+            if [ -f "$PID_FILE" ]; then
+                warn "检测到已有服务在运行，先停止..."
+                run_mode stop
+                sleep 1
+            fi
+
+            # 启动 dashboard
+            info "后台启动仪表板 (端口 8050)..."
+            nohup python3 -m fake_cdn dashboard > "$PROJECT_ROOT/output/dashboard.log" 2>&1 &
+            DASHBOARD_PID=$!
+            sleep 2
+
+            if kill -0 $DASHBOARD_PID 2>/dev/null; then
+                success "仪表板已启动 (PID: $DASHBOARD_PID)"
+                echo -e "  访问地址: ${GREEN}http://localhost:8050${NC}"
+                echo -e "  日志文件: output/dashboard.log"
+            else
+                error "仪表板启动失败，查看 output/dashboard.log"
+            fi
+
+            # 启动 realtime
+            echo ""
+            info "后台启动实时推送..."
+            nohup python3 -m fake_cdn realtime > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
+            REALTIME_PID=$!
+            sleep 2
+
+            if kill -0 $REALTIME_PID 2>/dev/null; then
+                success "实时推送已启动 (PID: $REALTIME_PID)"
+                echo -e "  日志文件: output/realtime.log"
+            else
+                error "实时推送启动失败，查看 output/realtime.log"
+            fi
+
+            # 保存 PID
+            echo "DASHBOARD_PID=$DASHBOARD_PID" > "$PID_FILE"
+            echo "REALTIME_PID=$REALTIME_PID" >> "$PID_FILE"
+
+            echo ""
+            success "所有服务已在后台启动!"
+            echo ""
+            echo -e "  仪表板: ${GREEN}http://localhost:8050${NC}"
+            echo -e "  停止服务: ${YELLOW}$0 stop${NC}"
+            echo -e "  查看日志: tail -f output/realtime.log"
+            ;;
+        8|stop)
+            PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
+
+            if [ ! -f "$PID_FILE" ]; then
+                warn "没有运行中的服务"
+                return 0
+            fi
+
+            info "停止服务..."
+            source "$PID_FILE"
+
+            if [ -n "$DASHBOARD_PID" ] && kill -0 $DASHBOARD_PID 2>/dev/null; then
+                kill $DASHBOARD_PID 2>/dev/null
+                success "仪表板已停止 (PID: $DASHBOARD_PID)"
+            fi
+
+            if [ -n "$REALTIME_PID" ] && kill -0 $REALTIME_PID 2>/dev/null; then
+                kill $REALTIME_PID 2>/dev/null
+                success "实时推送已停止 (PID: $REALTIME_PID)"
+            fi
+
+            rm -f "$PID_FILE"
+            success "所有服务已停止"
             ;;
         0|exit)
             info "退出"
@@ -339,7 +469,7 @@ main() {
     # 交互式菜单
     while true; do
         show_menu
-        read -p "请选择 [0-6]: " choice
+        read -p "请选择 [0-8]: " choice
         echo ""
         run_mode "$choice" || continue
 
