@@ -445,12 +445,25 @@ Percentile95Validator.print_report(result)
             # PID 文件
             PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
 
-            # 检查是否已有服务在运行
+            # 强制清理旧进程
+            info "清理旧进程..."
+
+            # 清理 PID 文件中的进程
             if [ -f "$PID_FILE" ]; then
-                warn "检测到已有服务在运行，先停止..."
-                run_mode stop
-                sleep 1
+                source "$PID_FILE"
+                kill $DASHBOARD_PID 2>/dev/null || true
+                kill $REALTIME_PID 2>/dev/null || true
+                rm -f "$PID_FILE"
             fi
+
+            # 清理端口占用
+            lsof -ti:8050 | xargs -r kill -9 2>/dev/null || true
+
+            # 清理 fake_cdn 进程
+            pkill -9 -f "fake_cdn" 2>/dev/null || true
+
+            sleep 1
+            success "旧进程已清理"
 
             # 启动 dashboard
             info "后台启动仪表板 (端口 8050)..."
