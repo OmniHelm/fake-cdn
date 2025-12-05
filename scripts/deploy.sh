@@ -22,8 +22,8 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # 仓库地址
 REPO_URL="https://github.com/OmniHelm/fake-cdn.git"
-# 默认安装到当前目录下的 fake-cdn，可通过 FAKE_CDN_DIR 环境变量覆盖
-INSTALL_DIR="${FAKE_CDN_DIR:-$(pwd)/fake-cdn}"
+# 固定安装到 /opt/fake-cdn，可通过 FAKE_CDN_DIR 环境变量覆盖
+INSTALL_DIR="${FAKE_CDN_DIR:-/opt/fake-cdn}"
 
 # 判断是否通过管道运行 (curl | bash)
 if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "bash" ]; then
@@ -67,6 +67,7 @@ remote_install() {
 # 如果是远程安装，克隆后执行本地脚本
 if [ "$REMOTE_INSTALL" = true ]; then
     remote_install "$@"
+    exit $?
 fi
 
 cd "$PROJECT_ROOT"
