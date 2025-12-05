@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict
 
 from fake_cdn.core.generator import CDNLogGenerator, BandwidthCurveGenerator
-from fake_cdn.core.pusher import LogPusher
+from fake_cdn.core.pusher import LogPusher, LocalSaver
 
 
 class RealtimeScheduler:
@@ -22,9 +22,10 @@ class RealtimeScheduler:
     状态管理: 记录已推送的时间点,支持断点续传
     """
 
-    def __init__(self, config: dict, state_file: str = "./state.json"):
+    def __init__(self, config: dict, state_file: str = "./state.json", output_dir: str = "./output"):
         self.config = config
         self.state_file = state_file
+        self.output_dir = output_dir
 
         self.generator = CDNLogGenerator(config)
         self.pusher = LogPusher(config)
@@ -134,6 +135,9 @@ class RealtimeScheduler:
         result = self.pusher.push_batch(logs, dry_run)
 
         if result["success"] > 0:
+            # 保存到本地数据库 (供 dashboard 展示)
+            LocalSaver.save_logs(logs, self.output_dir)
+
             # 更新状态
             self.state["pushed_timestamps"].append(timestamp_ms)
             self.state["current_index"] = index + 1
