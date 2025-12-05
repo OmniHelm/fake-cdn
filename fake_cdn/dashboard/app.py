@@ -736,7 +736,7 @@ def create_app(data_file=None):
     return app
 
 
-def run_dashboard(host="0.0.0.0", port=8050, debug=True, data_file=None):
+def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
     """运行仪表板"""
     app = create_app(data_file)
 
