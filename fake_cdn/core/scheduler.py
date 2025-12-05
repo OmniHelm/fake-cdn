@@ -102,7 +102,7 @@ class RealtimeScheduler:
         if self.bandwidth_curve is None:
             print("[初始化] 预生成带宽曲线...")
             curve_gen = BandwidthCurveGenerator(
-                self.config["target"]["bandwidth_95_gbps"],
+                self.config["target"]["bandwidth_gbps"],
                 self.config
             )
             self.bandwidth_curve = curve_gen.generate(
