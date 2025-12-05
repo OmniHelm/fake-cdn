@@ -154,7 +154,7 @@ class RealtimeScheduler:
 
         print(f"[启动] 实时调度器启动")
         print(f"[配置] 时间间隔: {self.config['time']['interval_seconds']} 秒")
-        print(f"[配置] 目标带宽: {self.config['target']['bandwidth_95_gbps']} Gbps")
+        print(f"[配置] 目标带宽: {self.config['target']['bandwidth_gbps']} Gbps")
 
         try:
             while True:
