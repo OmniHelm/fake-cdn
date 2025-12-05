@@ -279,10 +279,101 @@ else:
     fi
 }
 
+# 首次运行向导
+first_run_wizard() {
+    separator
+    echo -e "${CYAN}━━━━━━━━━━━━ 初始化向导 ━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # 1. 检查数据库状态
+    if [ ! -f "output/cdn_logs.db" ]; then
+        echo -e "${YELLOW}[数据库]${NC} 未检测到模拟数据"
+        echo ""
+        echo -n "是否现在生成模拟数据? (Y/n): "
+        read -r gen_data
+        if [[ ! "$gen_data" =~ ^[Nn]$ ]]; then
+            echo ""
+            run_mode simulation
+            echo ""
+            read -p "按回车继续..." _
+        fi
+    else
+        echo -e "${GREEN}[数据库]${NC} 已存在模拟数据"
+        show_status
+    fi
+
+    separator
+
+    # 2. 检查 API 配置
+    DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
+
+    echo -e "${YELLOW}[推送配置]${NC}"
+    echo ""
+
+    if [ "$DRY_RUN" = "True" ]; then
+        echo -e "  当前模式: ${GREEN}dry_run (模拟推送，不发送真实请求)${NC}"
+        echo ""
+        echo -n "是否配置真实 API 推送? (y/N): "
+        read -r config_api
+        if [[ "$config_api" =~ ^[Yy]$ ]]; then
+            configure_api
+        fi
+    else
+        echo -e "  当前模式: ${RED}真实推送${NC}"
+        check_push_config
+    fi
+
+    separator
+}
+
+# 配置 API
+configure_api() {
+    echo ""
+    echo -e "${CYAN}配置 API 推送${NC}"
+    echo ""
+
+    # API Endpoint
+    echo -n "API Endpoint (留空跳过): "
+    read -r api_endpoint
+    if [ -n "$api_endpoint" ]; then
+        export CDN_API_ENDPOINT="$api_endpoint"
+        echo "export CDN_API_ENDPOINT=\"$api_endpoint\"" >> ~/.bashrc
+        success "CDN_API_ENDPOINT 已设置"
+    fi
+
+    # API VIP
+    echo -n "API VIP (留空跳过): "
+    read -r api_vip
+    if [ -n "$api_vip" ]; then
+        export CDN_API_VIP="$api_vip"
+        echo "export CDN_API_VIP=\"$api_vip\"" >> ~/.bashrc
+        success "CDN_API_VIP 已设置"
+    fi
+
+    # 是否关闭 dry_run
+    if [ -n "$api_endpoint" ] && [ -n "$api_vip" ]; then
+        echo ""
+        echo -n "是否关闭 dry_run 模式开始真实推送? (y/N): "
+        read -r disable_dry
+        if [[ "$disable_dry" =~ ^[Yy]$ ]]; then
+            python3 -c "
+import json
+with open('config.json', 'r') as f:
+    config = json.load(f)
+config['mode']['dry_run'] = False
+with open('config.json', 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+"
+            success "dry_run 已关闭，将进行真实推送"
+            warn "请确保 API 指向测试环境!"
+        fi
+    fi
+}
+
 # 显示菜单
 show_menu() {
     separator
-    echo -e "${GREEN}部署完成! 请选择运行模式:${NC}"
+    echo -e "${GREEN}请选择运行模式:${NC}"
     echo ""
     echo "  1) simulation  - 模拟模式 (生成测试数据)"
     echo "  2) realtime    - 实时模式 (按真实时间推送)"
@@ -483,16 +574,15 @@ main() {
     echo -e "${YELLOW}[5/5]${NC} 目录准备"
     setup_output
 
-    # 显示状态
-    show_status
-    check_push_config
-
     # 如果有命令行参数，直接运行
     if [ -n "$MODE" ]; then
         separator
         run_mode "$MODE"
         exit 0
     fi
+
+    # 首次运行向导
+    first_run_wizard
 
     # 交互式菜单
     while true; do
