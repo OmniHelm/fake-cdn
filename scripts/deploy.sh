@@ -328,32 +328,64 @@ first_run_wizard() {
     separator
 }
 
+# 加载 .env 文件
+load_env() {
+    ENV_FILE="$PROJECT_ROOT/.env"
+    if [ -f "$ENV_FILE" ]; then
+        source "$ENV_FILE"
+    fi
+}
+
+# 保存环境变量到 .env
+save_env() {
+    ENV_FILE="$PROJECT_ROOT/.env"
+    cat > "$ENV_FILE" << EOF
+# Fake CDN 环境变量配置
+CDN_API_ENDPOINT="$CDN_API_ENDPOINT"
+CDN_API_VIP="$CDN_API_VIP"
+EOF
+    chmod 600 "$ENV_FILE"
+}
+
 # 配置 API
 configure_api() {
     echo ""
     echo -e "${CYAN}配置 API 推送${NC}"
     echo ""
 
+    ENV_FILE="$PROJECT_ROOT/.env"
+
+    # 加载已有配置
+    load_env
+
     # API Endpoint
-    echo -n "API Endpoint (留空跳过): "
+    current_endpoint="${CDN_API_ENDPOINT:-未配置}"
+    echo -e "当前 Endpoint: ${YELLOW}$current_endpoint${NC}"
+    echo -n "API Endpoint (留空保持不变): "
     read -r api_endpoint
     if [ -n "$api_endpoint" ]; then
         export CDN_API_ENDPOINT="$api_endpoint"
-        echo "export CDN_API_ENDPOINT=\"$api_endpoint\"" >> ~/.bashrc
         success "CDN_API_ENDPOINT 已设置"
     fi
 
     # API VIP
-    echo -n "API VIP (留空跳过): "
+    current_vip="${CDN_API_VIP:-未配置}"
+    echo -e "当前 VIP: ${YELLOW}$current_vip${NC}"
+    echo -n "API VIP (留空保持不变): "
     read -r api_vip
     if [ -n "$api_vip" ]; then
         export CDN_API_VIP="$api_vip"
-        echo "export CDN_API_VIP=\"$api_vip\"" >> ~/.bashrc
         success "CDN_API_VIP 已设置"
     fi
 
+    # 保存到 .env 文件
+    if [ -n "$CDN_API_ENDPOINT" ] || [ -n "$CDN_API_VIP" ]; then
+        save_env
+        success "配置已保存到 $ENV_FILE"
+    fi
+
     # 是否关闭 dry_run
-    if [ -n "$api_endpoint" ] && [ -n "$api_vip" ]; then
+    if [ -n "$CDN_API_ENDPOINT" ] && [ -n "$CDN_API_VIP" ]; then
         echo ""
         echo -n "是否关闭 dry_run 模式开始真实推送? (y/N): "
         read -r disable_dry
@@ -385,6 +417,7 @@ show_menu() {
     echo "  6) status      - 查看状态"
     echo -e "  ${CYAN}7) full         - 完整模式 (realtime + dashboard 后台启动)${NC}"
     echo -e "  ${RED}8) stop         - 停止后台服务${NC}"
+    echo -e "  ${YELLOW}9) config       - 配置 API 推送${NC}"
     echo "  0) exit        - 退出"
     echo ""
 }
@@ -442,13 +475,16 @@ Percentile95Validator.print_report(result)
             info "启动完整模式 (realtime + dashboard)..."
             echo ""
 
+            # 加载 .env 文件
+            load_env
+
             # 检查 dry_run 状态和 API 配置
             DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
             if [ "$DRY_RUN" = "False" ]; then
                 if [ -z "$CDN_API_ENDPOINT" ] || [ -z "$CDN_API_VIP" ]; then
-                    error "dry_run=false 但未配置 API 环境变量。请先运行:
-  export CDN_API_ENDPOINT=<your_endpoint>
-  export CDN_API_VIP=<your_vip>"
+                    error "dry_run=false 但未配置 API。请先在菜单中选择配置 API，或手动创建 .env 文件:
+  echo 'CDN_API_ENDPOINT=\"your_endpoint\"' > $PROJECT_ROOT/.env
+  echo 'CDN_API_VIP=\"your_vip\"' >> $PROJECT_ROOT/.env"
                 fi
                 echo -e "  API: ${GREEN}$CDN_API_ENDPOINT${NC}"
             fi
@@ -550,6 +586,9 @@ Percentile95Validator.print_report(result)
 
             success "所有服务已停止"
             ;;
+        9|config)
+            configure_api
+            ;;
         0|exit)
             info "退出"
             exit 0
@@ -624,7 +663,7 @@ main() {
     # 交互式菜单
     while true; do
         show_menu
-        read -p "请选择 [0-8]: " choice
+        read -p "请选择 [0-9]: " choice
         echo ""
         run_mode "$choice" || continue
 
