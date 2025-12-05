@@ -442,6 +442,17 @@ Percentile95Validator.print_report(result)
             info "启动完整模式 (realtime + dashboard)..."
             echo ""
 
+            # 检查 dry_run 状态和 API 配置
+            DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
+            if [ "$DRY_RUN" = "False" ]; then
+                if [ -z "$CDN_API_ENDPOINT" ] || [ -z "$CDN_API_VIP" ]; then
+                    error "dry_run=false 但未配置 API 环境变量。请先运行:
+  export CDN_API_ENDPOINT=<your_endpoint>
+  export CDN_API_VIP=<your_vip>"
+                fi
+                echo -e "  API: ${GREEN}$CDN_API_ENDPOINT${NC}"
+            fi
+
             # PID 文件
             PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
 
@@ -482,7 +493,9 @@ Percentile95Validator.print_report(result)
             # 启动 realtime
             echo ""
             info "后台启动实时推送..."
-            nohup python3 -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
+            # 传递环境变量到后台进程
+            nohup env CDN_API_ENDPOINT="$CDN_API_ENDPOINT" CDN_API_VIP="$CDN_API_VIP" \
+                python3 -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
             REALTIME_PID=$!
             sleep 2
 
