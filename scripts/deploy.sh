@@ -26,10 +26,8 @@ INSTALL_DIR="${FAKE_CDN_DIR:-$HOME/fake-cdn}"
 
 # 判断是否通过管道运行 (curl | bash)
 if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "bash" ]; then
-    # 通过管道运行，需要先克隆项目
+    # 通过管道运行，需要先克隆项目然后执行本地脚本
     REMOTE_INSTALL=true
-    # 重定向 stdin 到 /dev/tty 以支持交互式输入
-    exec < /dev/tty
 else
     # 本地文件运行
     REMOTE_INSTALL=false
@@ -37,8 +35,8 @@ else
     PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 fi
 
-# 远程安装: 克隆项目
-clone_repo() {
+# 远程安装: 克隆项目并执行本地脚本
+remote_install() {
     echo ""
     info "检查 git..."
     if ! command -v git &> /dev/null; then
@@ -47,27 +45,27 @@ clone_repo() {
     success "git 已安装"
 
     if [ -d "$INSTALL_DIR" ]; then
-        warn "目录已存在: $INSTALL_DIR"
-        echo -n "是否删除并重新安装? (y/N): "
-        read -r confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            rm -rf "$INSTALL_DIR"
-        else
-            info "使用现有目录"
-            PROJECT_ROOT="$INSTALL_DIR"
-            return 0
-        fi
+        info "目录已存在，更新仓库..."
+        cd "$INSTALL_DIR"
+        git pull -q 2>/dev/null || warn "更新失败，使用现有代码"
+    else
+        info "克隆仓库到 $INSTALL_DIR ..."
+        git clone -q "$REPO_URL" "$INSTALL_DIR"
+        success "克隆完成"
+        cd "$INSTALL_DIR"
     fi
 
-    info "克隆仓库到 $INSTALL_DIR ..."
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    success "克隆完成"
-    PROJECT_ROOT="$INSTALL_DIR"
+    echo ""
+    success "正在启动本地部署脚本..."
+    echo ""
+
+    # 执行本地脚本（stdin 不再被管道占用，可以正常交互）
+    exec bash ./scripts/deploy.sh "$@"
 }
 
-# 如果是远程安装，先克隆
+# 如果是远程安装，克隆后执行本地脚本
 if [ "$REMOTE_INSTALL" = true ]; then
-    clone_repo
+    remote_install "$@"
 fi
 
 cd "$PROJECT_ROOT"
