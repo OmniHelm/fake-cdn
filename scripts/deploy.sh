@@ -341,8 +341,8 @@ save_env() {
     ENV_FILE="$PROJECT_ROOT/.env"
     cat > "$ENV_FILE" << EOF
 # Fake CDN 环境变量配置
-CDN_API_ENDPOINT="$CDN_API_ENDPOINT"
-CDN_API_VIP="$CDN_API_VIP"
+export CDN_API_ENDPOINT="$CDN_API_ENDPOINT"
+export CDN_API_VIP="$CDN_API_VIP"
 EOF
     chmod 600 "$ENV_FILE"
 }
