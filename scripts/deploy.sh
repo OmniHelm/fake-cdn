@@ -433,7 +433,7 @@ run_mode() {
             ;;
         2|realtime)
             info "启动实时模式..."
-            python3 -m fake_cdn realtime
+            python3 -u -m fake_cdn realtime
             ;;
         3|catchup)
             info "启动追赶模式..."
@@ -531,7 +531,7 @@ Percentile95Validator.print_report(result)
             info "后台启动实时推送..."
             # 传递环境变量到后台进程
             nohup env CDN_API_ENDPOINT="$CDN_API_ENDPOINT" CDN_API_VIP="$CDN_API_VIP" \
-                python3 -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
+                python3 -u -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
             REALTIME_PID=$!
             sleep 2
 
