@@ -59,8 +59,8 @@ remote_install() {
     success "正在启动本地部署脚本..."
     echo ""
 
-    # 执行本地脚本（stdin 不再被管道占用，可以正常交互）
-    exec bash ./scripts/deploy.sh "$@"
+    # 执行本地脚本，显式重定向 stdin 到终端以支持交互
+    bash ./scripts/deploy.sh "$@" < /dev/tty
 }
 
 # 如果是远程安装，克隆后执行本地脚本
