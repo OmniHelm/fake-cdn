@@ -28,6 +28,8 @@ INSTALL_DIR="${FAKE_CDN_DIR:-$HOME/fake-cdn}"
 if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "bash" ]; then
     # 通过管道运行，需要先克隆项目
     REMOTE_INSTALL=true
+    # 重定向 stdin 到 /dev/tty 以支持交互式输入
+    exec < /dev/tty
 else
     # 本地文件运行
     REMOTE_INSTALL=false
