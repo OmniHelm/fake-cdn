@@ -469,7 +469,7 @@ Percentile95Validator.print_report(result)
             # 启动 realtime
             echo ""
             info "后台启动实时推送..."
-            nohup python3 -m fake_cdn realtime > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
+            nohup python3 -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
             REALTIME_PID=$!
             sleep 2
 

@@ -324,6 +324,12 @@ def main():
         help="迁移模式: 迁移后删除源 JSONL 文件"
     )
 
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="跳过确认提示 (用于非交互式运行)"
+    )
+
     args = parser.parse_args()
 
     # 仪表板和迁移模式不需要加载配置
@@ -367,10 +373,18 @@ def main():
 
         print("⚠️  警告: Dry-Run已关闭, 将真实推送数据到API!")
         print(f"⚠️  目标API: {config['api']['endpoint']}")
-        response = input("确认继续? (yes/no): ")
-        if response.lower() != "yes":
-            print("已取消")
-            sys.exit(0)
+
+        # 检查是否需要交互确认
+        if args.yes:
+            print("[跳过确认] 使用 -y/--yes 参数")
+        elif sys.stdin.isatty():
+            response = input("确认继续? (yes/no): ")
+            if response.lower() != "yes":
+                print("已取消")
+                sys.exit(0)
+        else:
+            print("[错误] 非交互模式下需要 -y/--yes 参数确认")
+            sys.exit(1)
 
     # 路由到对应模式
     try:
