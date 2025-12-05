@@ -149,7 +149,28 @@ setup_venv() {
 
     if [ ! -d "venv" ]; then
         info "创建虚拟环境..."
-        python3 -m venv venv
+
+        # 尝试创建虚拟环境
+        if ! python3 -m venv venv 2>/dev/null; then
+            echo ""
+            warn "创建虚拟环境失败，可能缺少 python3-venv 包"
+            echo ""
+
+            # 检测系统类型并给出安装提示
+            if [ -f /etc/debian_version ]; then
+                PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+')
+                echo -e "请运行以下命令安装:"
+                echo -e "  ${YELLOW}sudo apt install python${PYTHON_VERSION}-venv${NC}"
+                echo ""
+            elif [ -f /etc/redhat-release ]; then
+                echo -e "请运行以下命令安装:"
+                echo -e "  ${YELLOW}sudo yum install python3-virtualenv${NC}"
+                echo ""
+            fi
+
+            error "请安装 python3-venv 后重新运行此脚本"
+        fi
+
         success "虚拟环境已创建"
     else
         success "虚拟环境已存在"
