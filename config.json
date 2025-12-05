@@ -1,0 +1,90 @@
+{
+  "target": {
+    "bandwidth_gbps": 20.0,
+    "comment": "平均带宽20Gbps = 每天211TB流量 (20 × 10.54 = 210.8 TB)"
+  },
+
+  "time": {
+    "start_date": "2025-01-01",
+    "duration_days": 30,
+    "interval_seconds": 300,
+    "comment": "30天, 5分钟间隔 = 8640个点 × 5地区 = 43200条"
+  },
+
+  "dimensions": {
+    "tenant_id": "hccl",
+    "domains": [
+      "henghost.com",
+      "as979.net",
+      "agentdemo.west263.com",
+      "enuoidc.com",
+      "oks.llc",
+      "neburst.com",
+      "nube.sh",
+      "gomami.io",
+      "sharon.io",
+      "yxvm.com",
+      "cloud.isif.net",
+      "fxtransit.io",
+      "lemlist.com",
+      "aweber.com",
+      "cdnsun.com",
+      "neon.com",
+      "xata.io",
+      "kraken.io",
+      "blowfishstudios.com",
+      "mossmouth.com",
+      "blendomgames.com",
+      "extremelyok.com",
+      "fullbrightcompany.com",
+      "mobius.digital",
+      "deckninegames.com",
+      "doinksoft.com",
+      "megacrit.com",
+      "freelivesgames.com",
+      "10tons.com",
+      "steelwoolstudios.com",
+      "freebirdgames.com",
+      "benchling.com",
+      "klaviyo.com",
+      "personio.com"
+    ],
+    "regions": [
+      {"country": "cn", "region": "mainland_china", "weight": 0.2},
+      {"country": "cn", "region": "mainland_china", "weight": 0.2},
+      {"country": "cn", "region": "mainland_china", "weight": 0.2},
+      {"country": "cn", "region": "mainland_china", "weight": 0.2},
+      {"country": "cn", "region": "mainland_china", "weight": 0.2}
+    ],
+    "comment": "真实CDN域名+多地区分布"
+  },
+
+  "realism": {
+    "cache_hit_rate": [0.85, 0.95],
+    "avg_object_size_kb": [200, 2048],
+    "origin_fail_rate": [0.001, 0.01],
+    "burst_probability": 0.0,
+    "anomaly_probability": 0.001,
+    "comment": "调整后参数: 禁用突发流量,使95分位接近20 Gbps"
+  },
+
+  "api": {
+    "endpoint": "",
+    "headers": {
+      "vip": "",
+      "Content-Type": "application/json"
+    },
+    "timeout": 10,
+    "retry": 3,
+    "batch_size": 10,
+    "comment": "通过环境变量配置: CDN_API_ENDPOINT, CDN_API_VIP"
+  },
+
+  "mode": {
+    "run_mode": "simulation",
+    "dry_run": true,
+    "save_local": true,
+    "output_dir": "./output",
+    "comment": "simulation=模拟运行生成全月数据, realtime=实时推送, dry_run=true时不真实推送"
+  }
+}
