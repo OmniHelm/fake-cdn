@@ -163,9 +163,23 @@ def create_summary_cards(df):
     avg_bw = time_agg["bw_mbps"].mean()  # 平均带宽
 
     # 计算日平均和日95
+    # 95计费：每天288个点，去掉最高5%（约14个），取第273个值
     time_agg["date"] = time_agg["timestamp"].dt.date
+
+    def calc_95_billing(bw_series):
+        """计算95计费值：排序后取第95%位置的值"""
+        sorted_bw = bw_series.sort_values(ascending=True).values
+        n = len(sorted_bw)
+        # 取第95%位置，即去掉最高5%后的最大值
+        idx = int(n * 0.95) - 1
+        if idx < 0:
+            idx = 0
+        if idx >= n:
+            idx = n - 1
+        return sorted_bw[idx]
+
     daily_stats = time_agg.groupby("date").agg({
-        "bw_mbps": ["mean", lambda x: np.percentile(x, 95)]
+        "bw_mbps": ["mean", calc_95_billing]
     })
     daily_stats.columns = ["daily_avg", "daily_p95"]
     daily_avg_bw = daily_stats["daily_avg"].mean()  # 日平均的均值
