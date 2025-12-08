@@ -129,7 +129,7 @@ def process_data(records):
 
 
 def get_default_date_range(storage: CDNLogStorage):
-    """获取默认日期范围（最近1天或数据范围）"""
+    """获取默认日期范围（显示全部数据）"""
     min_time, max_time = storage.get_time_range()
     if min_time is None or max_time is None:
         # 无数据时返回当前时间范围
@@ -140,9 +140,8 @@ def get_default_date_range(storage: CDNLogStorage):
     max_date = datetime.fromtimestamp(max_time / 1000).date()
     min_date = datetime.fromtimestamp(min_time / 1000).date()
 
-    # 默认显示最近1天
-    default_start = max_date
-    return default_start, max_date
+    # 默认显示全部数据范围
+    return min_date, max_date
 
 
 def create_metric_card(title, value, subtitle=None, color=None):
@@ -366,10 +365,11 @@ def create_app(data_file=None):
     # 计算日期范围边界
     if min_time and max_time:
         min_date = datetime.fromtimestamp(min_time / 1000).date()
-        max_date = datetime.fromtimestamp(max_time / 1000).date()
+        # max_date_allowed 设为未来30天，避免限制用户选择
+        max_date = (datetime.now() + timedelta(days=30)).date()
     else:
         min_date = default_start
-        max_date = default_end
+        max_date = (datetime.now() + timedelta(days=30)).date()
 
     # 创建 Dash 应用
     app = dash.Dash(__name__, title="CDN Analytics")
