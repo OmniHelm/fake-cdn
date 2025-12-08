@@ -155,10 +155,22 @@ def create_metric_card(title, value, subtitle=None, color=None):
 
 def create_summary_cards(df):
     """创建汇总卡片"""
-    # 按时间点聚合后计算峰值带宽
-    time_agg = df.groupby("batch").agg({"bw_mbps": "sum"})
+    import numpy as np
+
+    # 按时间点聚合后计算带宽指标
+    time_agg = df.groupby("batch").agg({"bw_mbps": "sum", "timestamp": "first"})
     peak_bw = time_agg["bw_mbps"].max()  # 峰值带宽
     avg_bw = time_agg["bw_mbps"].mean()  # 平均带宽
+
+    # 计算日平均和日95
+    time_agg["date"] = time_agg["timestamp"].dt.date
+    daily_stats = time_agg.groupby("date").agg({
+        "bw_mbps": ["mean", lambda x: np.percentile(x, 95)]
+    })
+    daily_stats.columns = ["daily_avg", "daily_p95"]
+    daily_avg_bw = daily_stats["daily_avg"].mean()  # 日平均的均值
+    daily_p95_bw = daily_stats["daily_p95"].mean()  # 日95的均值
+
     total_flux = df["flux_gb"].sum()
     total_requests = df["req_num"].sum()
     avg_hit_rate = df["hit_rate"].mean()
@@ -167,12 +179,11 @@ def create_summary_cards(df):
 
     return html.Div([
         create_metric_card("峰值带宽", f"{peak_bw/1000:.1f} Gbps", f"平均 {avg_bw/1000:.1f} Gbps"),
+        create_metric_card("日平均带宽", f"{daily_avg_bw/1000:.1f} Gbps", "每日平均值"),
+        create_metric_card("日95带宽", f"{daily_p95_bw/1000:.1f} Gbps", "每日95分位值", COLORS["primary"]),
         create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量"),
-        create_metric_card("请求总数", f"{total_requests:,}", "HTTP 请求次数"),
         create_metric_card("缓存命中率", f"{avg_hit_rate:.1f}%", "平均命中比例",
                           COLORS["success"] if avg_hit_rate >= 90 else COLORS["warning"]),
-        create_metric_card("回源失败", f"{total_bs_fail:,}", f"共 {total_bs:,} 次回源",
-                          COLORS["danger"] if total_bs_fail > 100 else COLORS["text_primary"]),
     ], className="metrics-grid")
 
 
