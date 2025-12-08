@@ -155,7 +155,10 @@ def create_metric_card(title, value, subtitle=None, color=None):
 
 def create_summary_cards(df):
     """创建汇总卡片"""
-    total_bw = df["bw_mbps"].sum()
+    # 按时间点聚合后计算峰值带宽
+    time_agg = df.groupby("batch").agg({"bw_mbps": "sum"})
+    peak_bw = time_agg["bw_mbps"].max()  # 峰值带宽
+    avg_bw = time_agg["bw_mbps"].mean()  # 平均带宽
     total_flux = df["flux_gb"].sum()
     total_requests = df["req_num"].sum()
     avg_hit_rate = df["hit_rate"].mean()
@@ -163,7 +166,7 @@ def create_summary_cards(df):
     total_bs = df["bs_num"].sum()
 
     return html.Div([
-        create_metric_card("总带宽", f"{total_bw/1000:.1f} Gbps", "累计峰值带宽"),
+        create_metric_card("峰值带宽", f"{peak_bw/1000:.1f} Gbps", f"平均 {avg_bw/1000:.1f} Gbps"),
         create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量"),
         create_metric_card("请求总数", f"{total_requests:,}", "HTTP 请求次数"),
         create_metric_card("缓存命中率", f"{avg_hit_rate:.1f}%", "平均命中比例",
