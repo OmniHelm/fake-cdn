@@ -74,21 +74,43 @@ class BandwidthCurveGenerator:
         return curve
 
     def _adjust_to_target(self, curve: List[float]) -> List[float]:
-        """线性调整曲线,使平均带宽精确等于目标值"""
+        """线性调整曲线,使日95带宽精确等于目标值"""
 
-        actual_avg = sum(curve) / len(curve)
+        # 按天分组计算每日95值
+        points_per_day = 24 * 60 // (self.config["time"]["interval_seconds"] // 60)
 
-        # 如果误差超过2%,进行缩放
-        if abs(actual_avg - self.target_gbps) / self.target_gbps > 0.02:
-            scale = self.target_gbps / actual_avg
+        def calc_daily_p95(day_curve):
+            """计算单日95计费值"""
+            sorted_bw = sorted(day_curve)
+            n = len(sorted_bw)
+            idx = int(n * 0.95) - 1
+            if idx < 0:
+                idx = 0
+            if idx >= n:
+                idx = n - 1
+            return sorted_bw[idx]
+
+        # 计算当前各日的95值
+        daily_p95_list = []
+        for day_start in range(0, len(curve), points_per_day):
+            day_curve = curve[day_start:day_start + points_per_day]
+            if len(day_curve) >= points_per_day * 0.5:  # 至少半天数据
+                daily_p95_list.append(calc_daily_p95(day_curve))
+
+        if daily_p95_list:
+            avg_daily_p95 = sum(daily_p95_list) / len(daily_p95_list)
+        else:
+            avg_daily_p95 = max(curve)
+
+        # 缩放使日95等于目标值
+        if abs(avg_daily_p95 - self.target_gbps) / self.target_gbps > 0.02:
+            scale = self.target_gbps / avg_daily_p95
             curve = [bw * scale for bw in curve]
-            print(f"[调整] 平均带宽从 {actual_avg:.2f} Gbps 调整到 {self.target_gbps:.2f} Gbps (缩放 {scale:.3f}x)")
-
-        # 打印95分位信息(参考)
-        sorted_curve = sorted(curve)
-        p95_index = int(len(sorted_curve) * 0.95)
-        p95_value = sorted_curve[p95_index]
-        print(f"[信息] 95分位: {p95_value:.2f} Gbps (比平均高 {(p95_value/self.target_gbps-1)*100:.1f}%)")
+            new_avg = sum(curve) / len(curve)
+            print(f"[调整] 日95从 {avg_daily_p95:.2f} Gbps 调整到 {self.target_gbps:.2f} Gbps (缩放 {scale:.3f}x)")
+            print(f"[信息] 调整后平均带宽: {new_avg:.2f} Gbps")
+        else:
+            print(f"[信息] 日95: {avg_daily_p95:.2f} Gbps (目标: {self.target_gbps:.2f} Gbps)")
 
         return curve
 
