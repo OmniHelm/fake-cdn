@@ -189,6 +189,7 @@ class CatchupScheduler:
         self.config = config
         self.start_date = datetime.strptime(start_date, "%Y-%m-%d")
         self.end_date = datetime.strptime(end_date, "%Y-%m-%d")
+        self.output_dir = config.get("output", {}).get("dir", "./output")
 
         self.generator = CDNLogGenerator(config)
         self.pusher = LogPusher(config)
@@ -210,7 +211,10 @@ class CatchupScheduler:
 
         logs, stats = self.generator.generate_full_month()
 
-        # 推送
+        # 保存到本地数据库 (供 dashboard 展示)
+        LocalSaver.save_logs(logs, self.output_dir)
+
+        # 推送到 API (如果不是 dry_run)
         self.pusher.push_all(logs, dry_run, show_progress=True)
 
         return stats
