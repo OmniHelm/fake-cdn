@@ -659,16 +659,17 @@ def create_app(data_file=None):
             "hit_num": "sum", "bs_num": "sum", "hit_rate": "mean", "timestamp": "first"
         }).reset_index()
 
-        # 1. 请求带宽趋势
+        # 1. 请求带宽趋势 (Mbps -> bps)
+        time_agg["bw_bps"] = time_agg["bw_mbps"] * 1000000
         bw_fig = go.Figure()
         bw_fig.add_trace(go.Scatter(
-            x=time_agg["timestamp"], y=time_agg["bw_mbps"],
+            x=time_agg["timestamp"], y=time_agg["bw_bps"],
             name="带宽", fill="tozeroy",
             line={"color": COLORS["primary"], "width": 2},
             fillcolor="rgba(59, 130, 246, 0.1)"
         ))
         bw_fig = apply_chart_style(bw_fig, "请求带宽")
-        bw_fig.update_yaxes(title_text="带宽 (Mbps)", title_font={"size": 11})
+        bw_fig.update_yaxes(title_text="带宽 (bps)", title_font={"size": 11})
 
         # 2. 请求流量趋势
         flux_fig = go.Figure()
@@ -690,7 +691,7 @@ def create_app(data_file=None):
             fillcolor="rgba(139, 92, 246, 0.1)"
         ))
         req_fig = apply_chart_style(req_fig, "请求数")
-        req_fig.update_yaxes(title_text="请求数", title_font={"size": 11})
+        req_fig.update_yaxes(title_text="请求数 (个)", title_font={"size": 11})
 
         # 4. 命中率趋势
         hitrate_fig = go.Figure()
