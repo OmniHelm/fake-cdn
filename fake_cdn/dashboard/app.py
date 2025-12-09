@@ -484,17 +484,17 @@ def create_app(data_file=None):
             html.Span(id="refresh-status", style={"marginLeft": "auto", "fontSize": "12px", "color": "#9ca3af"}),
         ], className="filter-bar"),
 
-        # 带宽趋势
+        # 第一排: 请求带宽 + 请求流量
         html.Div([
-            dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
-        ], className="chart-card"),
+            html.Div([
+                dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
+            ], className="chart-card"),
+            html.Div([
+                dcc.Graph(id="flux-chart", config={"displayModeBar": False})
+            ], className="chart-card"),
+        ], className="chart-row"),
 
-        # 请求带宽趋势
-        html.Div([
-            dcc.Graph(id="req-bandwidth-chart", config={"displayModeBar": False})
-        ], className="chart-card"),
-
-        # 请求分布 + 命中率
+        # 第二排: 请求数 + 命中率
         html.Div([
             html.Div([
                 dcc.Graph(id="requests-chart", config={"displayModeBar": False})
@@ -576,7 +576,7 @@ def create_app(data_file=None):
             Output("summary-cards", "children"),
             Output("refresh-status", "children"),
             Output("bandwidth-chart", "figure"),
-            Output("req-bandwidth-chart", "figure"),
+            Output("flux-chart", "figure"),
             Output("requests-chart", "figure"),
             Output("hitrate-chart", "figure"),
             Output("http-status-chart", "figure"),
@@ -653,75 +653,52 @@ def create_app(data_file=None):
         # 数据已在 SQL 层过滤，直接使用
         filtered_df = df
 
-        # 1. 带宽和流量趋势
+        # 聚合数据
         time_agg = filtered_df.groupby("batch").agg({
-            "bw_mbps": "sum", "flux_gb": "sum", "timestamp": "first"
+            "bw_mbps": "sum", "flux_gb": "sum", "req_num": "sum",
+            "hit_num": "sum", "bs_num": "sum", "hit_rate": "mean", "timestamp": "first"
         }).reset_index()
 
-        bw_fig = make_subplots(specs=[[{"secondary_y": True}]])
-        bw_fig.add_trace(
-            go.Scatter(
-                x=time_agg["timestamp"], y=time_agg["bw_mbps"],
-                name="带宽", fill="tozeroy",
-                line={"color": COLORS["primary"], "width": 2},
-                fillcolor="rgba(59, 130, 246, 0.1)"
-            ), secondary_y=False
-        )
-        bw_fig.add_trace(
-            go.Scatter(
-                x=time_agg["timestamp"], y=time_agg["flux_gb"],
-                name="流量", line={"color": COLORS["success"], "width": 2, "dash": "dot"}
-            ), secondary_y=True
-        )
-        bw_fig = apply_chart_style(bw_fig, "带宽与流量趋势")
-        bw_fig.update_yaxes(title_text="带宽 (Mbps)", secondary_y=False, title_font={"size": 11})
-        bw_fig.update_yaxes(title_text="流量 (GB)", secondary_y=True, title_font={"size": 11})
+        # 1. 请求带宽趋势
+        bw_fig = go.Figure()
+        bw_fig.add_trace(go.Scatter(
+            x=time_agg["timestamp"], y=time_agg["bw_mbps"],
+            name="带宽", fill="tozeroy",
+            line={"color": COLORS["primary"], "width": 2},
+            fillcolor="rgba(59, 130, 246, 0.1)"
+        ))
+        bw_fig = apply_chart_style(bw_fig, "请求带宽")
+        bw_fig.update_yaxes(title_text="带宽 (Mbps)", title_font={"size": 11})
 
-        # 1.5 请求带宽趋势 (使用推送API的bw字段，单位: Mbps -> bps)
-        req_bw_agg = filtered_df.groupby("batch").agg({
-            "bw_mbps": "sum", "timestamp": "first"
-        }).reset_index()
-        # bw_mbps 转换为 bps: Mbps * 1000000
-        req_bw_agg["req_bw_bps"] = req_bw_agg["bw_mbps"] * 1000000
+        # 2. 请求流量趋势
+        flux_fig = go.Figure()
+        flux_fig.add_trace(go.Scatter(
+            x=time_agg["timestamp"], y=time_agg["flux_gb"],
+            name="流量", fill="tozeroy",
+            line={"color": COLORS["success"], "width": 2},
+            fillcolor="rgba(16, 185, 129, 0.1)"
+        ))
+        flux_fig = apply_chart_style(flux_fig, "请求流量")
+        flux_fig.update_yaxes(title_text="流量 (GB)", title_font={"size": 11})
 
-        req_bw_fig = go.Figure()
-        req_bw_fig.add_trace(go.Scatter(
-            x=req_bw_agg["timestamp"], y=req_bw_agg["req_bw_bps"],
-            name="请求带宽", fill="tozeroy",
+        # 3. 请求数趋势
+        req_fig = go.Figure()
+        req_fig.add_trace(go.Scatter(
+            x=time_agg["timestamp"], y=time_agg["req_num"],
+            name="请求数", fill="tozeroy",
             line={"color": COLORS["purple"], "width": 2},
             fillcolor="rgba(139, 92, 246, 0.1)"
         ))
-        req_bw_fig = apply_chart_style(req_bw_fig, "请求带宽趋势")
-        req_bw_fig.update_yaxes(title_text="带宽 (bps)", title_font={"size": 11})
+        req_fig = apply_chart_style(req_fig, "请求数")
+        req_fig.update_yaxes(title_text="请求数", title_font={"size": 11})
 
-        # 2. 请求数分布
-        req_agg = filtered_df.groupby("batch").agg({
-            "req_num": "sum", "hit_num": "sum", "bs_num": "sum", "timestamp": "first"
-        }).reset_index()
-
-        req_fig = go.Figure()
-        req_fig.add_trace(go.Bar(
-            x=req_agg["timestamp"], y=req_agg["hit_num"], name="命中请求",
-            marker_color=COLORS["info"], marker_line_width=0
-        ))
-        req_fig.add_trace(go.Bar(
-            x=req_agg["timestamp"], y=req_agg["bs_num"], name="回源请求",
-            marker_color=COLORS["warning"], marker_line_width=0
-        ))
-        req_fig = apply_chart_style(req_fig, "请求分布")
-        req_fig.update_layout(barmode="stack", bargap=0.3)
-
-        # 3. 命中率趋势
-        hitrate_agg = filtered_df.groupby("batch").agg({
-            "hit_rate": "mean", "timestamp": "first"
-        }).reset_index()
-
+        # 4. 命中率趋势
         hitrate_fig = go.Figure()
         hitrate_fig.add_trace(go.Scatter(
-            x=hitrate_agg["timestamp"], y=hitrate_agg["hit_rate"],
+            x=time_agg["timestamp"], y=time_agg["hit_rate"],
             mode="lines+markers", name="命中率",
-            line={"color": COLORS["success"], "width": 2},
-            marker={"size": 4, "color": COLORS["success"]}
+            line={"color": COLORS["warning"], "width": 2},
+            marker={"size": 4, "color": COLORS["warning"]}
         ))
         hitrate_fig.add_hline(
             y=90, line_dash="dash", line_color=COLORS["text_muted"],
@@ -819,7 +796,7 @@ def create_app(data_file=None):
             header_info,
             summary,
             refresh_status,
-            bw_fig, req_bw_fig, req_fig, hitrate_fig,
+            bw_fig, flux_fig, req_fig, hitrate_fig,
             http_fig, bs_http_fig,
             domain_fig, origin_fig,
             table_data.to_dict("records")
