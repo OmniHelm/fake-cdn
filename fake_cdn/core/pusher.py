@@ -34,6 +34,11 @@ class LogPusher:
             "retries": 0,
         }
 
+        # API 请求日志文件
+        self.output_dir = config.get("output", {}).get("dir", "./output")
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.api_log_file = os.path.join(self.output_dir, "api_requests.log")
+
     def _create_session(self) -> requests.Session:
         """
         创建HTTP会话,配置重试策略
@@ -56,7 +61,19 @@ class LogPusher:
 
         return session
 
-    def push_single(self, log_entry: Dict, dry_run: bool = False) -> Tuple[bool, str]:
+    def _log_api_request(self, log_entry: Dict, status_code: int, response_text: str, error: str = None):
+        """记录 API 请求到日志文件"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.api_log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[{timestamp}] POST {self.api_config['endpoint']}\n")
+            f.write(f"Request: {json.dumps(log_entry, ensure_ascii=False)}\n")
+            if error:
+                f.write(f"Error: {error}\n")
+            else:
+                f.write(f"Response: HTTP {status_code} - {response_text}\n")
+
+    def push_single(self, log_entry: Dict, dry_run: bool = False, verbose: bool = False) -> Tuple[bool, str]:
         """
         推送单条日志
 
@@ -67,12 +84,22 @@ class LogPusher:
             return True, "dry-run mode"
 
         try:
+            if verbose:
+                print(f"[API请求] POST {self.api_config['endpoint']}")
+                print(f"[API请求体] {json.dumps(log_entry, ensure_ascii=False)}")
+
             response = self.session.post(
                 self.api_config["endpoint"],
                 json=log_entry,
                 headers=self.api_config["headers"],
                 timeout=self.api_config["timeout"]
             )
+
+            if verbose:
+                print(f"[API响应] HTTP {response.status_code}: {response.text[:500]}")
+
+            # 记录到日志文件
+            self._log_api_request(log_entry, response.status_code, response.text[:200])
 
             if response.status_code == 200:
                 self.stats["success"] += 1
@@ -84,6 +111,7 @@ class LogPusher:
 
         except requests.exceptions.RequestException as e:
             error_msg = f"请求异常: {str(e)}"
+            self._log_api_request(log_entry, 0, "", error=error_msg)
             self.stats["failed"] += 1
             return False, error_msg
 
