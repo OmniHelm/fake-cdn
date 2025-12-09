@@ -130,19 +130,16 @@ def process_data(records):
 
 
 def get_default_date_range(storage: CDNLogStorage):
-    """获取默认日期范围（显示全部数据）"""
+    """获取默认日期范围（默认当天）"""
     min_time, max_time = storage.get_time_range()
     if min_time is None or max_time is None:
         # 无数据时返回当前时间范围
         now = datetime.now()
         return now.date(), now.date()
 
-    # 转换为日期
-    max_date = datetime.fromtimestamp(max_time / 1000).date()
-    min_date = datetime.fromtimestamp(min_time / 1000).date()
-
-    # 默认显示全部数据范围
-    return min_date, max_date
+    # 默认显示当天
+    today = datetime.now().date()
+    return today, today
 
 
 def create_metric_card(title, value, subtitle=None, color=None):
