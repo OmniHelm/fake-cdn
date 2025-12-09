@@ -640,15 +640,12 @@ def create_app(data_file=None):
         bw_fig.update_yaxes(title_text="带宽 (Mbps)", secondary_y=False, title_font={"size": 11})
         bw_fig.update_yaxes(title_text="流量 (GB)", secondary_y=True, title_font={"size": 11})
 
-        # 1.5 请求带宽趋势 (单位: bps)
+        # 1.5 请求带宽趋势 (使用推送API的bw字段，单位: Mbps -> bps)
         req_bw_agg = filtered_df.groupby("batch").agg({
-            "req_num": "sum", "timestamp": "first"
+            "bw_mbps": "sum", "timestamp": "first"
         }).reset_index()
-        # 计算请求带宽: 请求数 * 平均响应大小 / 时间间隔
-        # 假设平均响应大小约 500KB，时间间隔 300 秒
-        avg_response_kb = 500
-        interval_seconds = 300
-        req_bw_agg["req_bw_bps"] = req_bw_agg["req_num"] * avg_response_kb * 1024 * 8 / interval_seconds
+        # bw_mbps 转换为 bps: Mbps * 1000000
+        req_bw_agg["req_bw_bps"] = req_bw_agg["bw_mbps"] * 1000000
 
         req_bw_fig = go.Figure()
         req_bw_fig.add_trace(go.Scatter(
