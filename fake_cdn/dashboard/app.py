@@ -454,6 +454,11 @@ def create_app(data_file=None):
             dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
         ], className="chart-card"),
 
+        # 请求带宽趋势
+        html.Div([
+            dcc.Graph(id="req-bandwidth-chart", config={"displayModeBar": False})
+        ], className="chart-card"),
+
         # 请求分布 + 命中率
         html.Div([
             html.Div([
@@ -536,6 +541,7 @@ def create_app(data_file=None):
             Output("summary-cards", "children"),
             Output("refresh-status", "children"),
             Output("bandwidth-chart", "figure"),
+            Output("req-bandwidth-chart", "figure"),
             Output("requests-chart", "figure"),
             Output("hitrate-chart", "figure"),
             Output("http-status-chart", "figure"),
@@ -586,14 +592,14 @@ def create_app(data_file=None):
             # 返回空状态
             return (
                 "数据加载失败", html.Div(), f"错误: {e}",
-                {}, {}, {}, {}, {}, {}, {}, []
+                {}, {}, {}, {}, {}, {}, {}, {}, []
             )
 
         # 处理空数据情况
         if df.empty:
             return (
                 "暂无数据", html.Div(), "无数据",
-                {}, {}, {}, {}, {}, {}, {}, []
+                {}, {}, {}, {}, {}, {}, {}, {}, []
             )
 
         # 更新头部信息
@@ -632,6 +638,26 @@ def create_app(data_file=None):
         bw_fig = apply_chart_style(bw_fig, "带宽与流量趋势")
         bw_fig.update_yaxes(title_text="带宽 (Mbps)", secondary_y=False, title_font={"size": 11})
         bw_fig.update_yaxes(title_text="流量 (GB)", secondary_y=True, title_font={"size": 11})
+
+        # 1.5 请求带宽趋势 (单位: bps)
+        req_bw_agg = filtered_df.groupby("batch").agg({
+            "req_num": "sum", "timestamp": "first"
+        }).reset_index()
+        # 计算请求带宽: 请求数 * 平均响应大小 / 时间间隔
+        # 假设平均响应大小约 500KB，时间间隔 300 秒
+        avg_response_kb = 500
+        interval_seconds = 300
+        req_bw_agg["req_bw_bps"] = req_bw_agg["req_num"] * avg_response_kb * 1024 * 8 / interval_seconds
+
+        req_bw_fig = go.Figure()
+        req_bw_fig.add_trace(go.Scatter(
+            x=req_bw_agg["timestamp"], y=req_bw_agg["req_bw_bps"],
+            name="请求带宽", fill="tozeroy",
+            line={"color": COLORS["purple"], "width": 2},
+            fillcolor="rgba(139, 92, 246, 0.1)"
+        ))
+        req_bw_fig = apply_chart_style(req_bw_fig, "请求带宽趋势")
+        req_bw_fig.update_yaxes(title_text="带宽 (bps)", title_font={"size": 11})
 
         # 2. 请求数分布
         req_agg = filtered_df.groupby("batch").agg({
@@ -758,7 +784,7 @@ def create_app(data_file=None):
             header_info,
             summary,
             refresh_status,
-            bw_fig, req_fig, hitrate_fig,
+            bw_fig, req_bw_fig, req_fig, hitrate_fig,
             http_fig, bs_http_fig,
             domain_fig, origin_fig,
             table_data.to_dict("records")
