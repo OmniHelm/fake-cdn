@@ -102,9 +102,9 @@ def process_data(records):
             "timestamp": timestamp,
             "batch": batch,
             "domain": record["domain"],
-            "bw_mbps": record["bw"] or 0,
+            "bw_mbps": (record["bw"] or 0) / 1000000,  # bps -> Mbps
             "flux_gb": (record["flux"] or 0) / (1024**3),
-            "bs_bw_mbps": record["bs_bw"] or 0,
+            "bs_bw_mbps": (record["bs_bw"] or 0) / 1000000,  # bps -> Mbps
             "bs_flux_gb": (record["bs_flux"] or 0) / (1024**3),
             "req_num": record["req_num"] or 0,
             "hit_num": record["hit_num"] or 0,

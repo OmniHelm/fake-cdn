@@ -58,19 +58,19 @@ class Percentile95Validator:
         """
         从日志中提取带宽并验证
 
-        日志格式: {"bw": 15360, ...}  # Mbps
+        日志格式: {"bw": 15360000000, ...}  # bps
         验证平均带宽是否达到目标
         """
 
-        # 提取带宽值 (Mbps -> Gbps)
-        bandwidths = [log["bw"] / 1024 for log in logs]
+        # 提取带宽值 (bps -> Gbps)
+        bandwidths = [log["bw"] / 1000000000 for log in logs]
 
         # 按维度分组统计(可选)
         by_region = defaultdict(list)
         by_domain = defaultdict(list)
 
         for log in logs:
-            bw_gbps = log["bw"] / 1024
+            bw_gbps = log["bw"] / 1000000000
             by_region[log["region"]].append(bw_gbps)
             by_domain[log["domain"]].append(bw_gbps)
 
