@@ -421,24 +421,22 @@ def create_app(data_file=None):
 
         # 筛选器
         html.Div([
-            # 开始时间输入框
+            # 开始时间输入框 (datetime-local 类型提供日期时间选择器)
             html.Span("开始时间", className="filter-label"),
             dcc.Input(
                 id="start-datetime",
-                type="text",
-                value=f"{default_start} 00:00:00",
-                placeholder="YYYY-MM-DD HH:MM:SS",
-                style={"width": "180px", "marginRight": "24px", "padding": "6px 10px",
+                type="datetime-local",
+                value=f"{default_start}T00:00:00",
+                style={"width": "200px", "marginRight": "24px", "padding": "6px 10px",
                        "border": "1px solid #e5e7eb", "borderRadius": "6px", "fontSize": "14px"}
             ),
             # 结束时间输入框
             html.Span("结束时间", className="filter-label"),
             dcc.Input(
                 id="end-datetime",
-                type="text",
-                value=f"{default_end} 23:59:59",
-                placeholder="YYYY-MM-DD HH:MM:SS",
-                style={"width": "180px", "marginRight": "24px", "padding": "6px 10px",
+                type="datetime-local",
+                value=f"{default_end}T23:59:59",
+                style={"width": "200px", "marginRight": "24px", "padding": "6px 10px",
                        "border": "1px solid #e5e7eb", "borderRadius": "6px", "fontSize": "14px"}
             ),
             # 域名筛选
@@ -566,24 +564,31 @@ def create_app(data_file=None):
     def update_all(start_datetime, end_datetime, selected_domain, n_intervals):
         """定时刷新 + 筛选条件更新所有图表"""
         # 转换日期时间字符串为时间戳（毫秒）
+        # datetime-local 格式: YYYY-MM-DDTHH:MM:SS 或 YYYY-MM-DDTHH:MM
         try:
             if start_datetime:
+                dt_str = start_datetime.strip().replace("T", " ")
                 try:
-                    start_dt = datetime.strptime(start_datetime.strip(), "%Y-%m-%d %H:%M:%S")
+                    start_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    # 尝试只有日期的格式
-                    start_dt = datetime.strptime(start_datetime.strip()[:10], "%Y-%m-%d")
+                    try:
+                        start_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        start_dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
                 start_time = int(start_dt.timestamp() * 1000)
             else:
                 start_time = None
 
             if end_datetime:
+                dt_str = end_datetime.strip().replace("T", " ")
                 try:
-                    end_dt = datetime.strptime(end_datetime.strip(), "%Y-%m-%d %H:%M:%S")
+                    end_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    # 尝试只有日期的格式，默认到当天结束
-                    end_dt = datetime.strptime(end_datetime.strip()[:10], "%Y-%m-%d")
-                    end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                    try:
+                        end_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        end_dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
+                        end_dt = end_dt.replace(hour=23, minute=59, second=59)
                 end_time = int(end_dt.timestamp() * 1000)
             else:
                 end_time = None
