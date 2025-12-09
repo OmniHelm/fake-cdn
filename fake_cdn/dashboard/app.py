@@ -432,6 +432,7 @@ def create_app(data_file=None):
                 max_date_allowed=max_date,
                 start_date=default_start,
                 end_date=default_end,
+                minimum_nights=0,  # 允许选择同一天
                 display_format="YYYY-MM-DD",
                 style={"marginRight": "24px"}
             ),
