@@ -560,6 +560,8 @@ def create_app(data_file=None):
     def update_all(start_date, end_date, selected_domain, n_intervals):
         """定时刷新 + 筛选条件更新所有图表"""
         # 转换日期为时间戳（毫秒）
+        # 日期范围: [start_date 00:00:00, end_date+1 00:00:00)
+        # 例如选择 12-08 到 12-09，实际查询 12-08 00:00:00 到 12-10 00:00:00
         try:
             if start_date:
                 start_dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
@@ -571,8 +573,9 @@ def create_app(data_file=None):
 
             if end_date:
                 end_dt = datetime.strptime(end_date[:10], "%Y-%m-%d")
-                # 结束日期取当天23:59:59
-                end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                # 结束日期取次日0点（不包含）
+                end_dt = end_dt + timedelta(days=1)
+                end_dt = end_dt.replace(hour=0, minute=0, second=0)
                 end_time = int(end_dt.timestamp() * 1000)
             else:
                 end_time = None
