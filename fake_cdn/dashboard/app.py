@@ -422,16 +422,53 @@ def create_app(data_file=None):
         # 筛选器
         html.Div([
             # 日期范围选择器
-            html.Span("日期范围", className="filter-label"),
-            dcc.DatePickerRange(
-                id="date-range-picker",
+            html.Span("开始", className="filter-label"),
+            dcc.DatePickerSingle(
+                id="start-date-picker",
                 min_date_allowed=min_date,
                 max_date_allowed=max_date,
-                start_date=default_start,
-                end_date=default_end,
-                minimum_nights=0,  # 允许选择同一天
+                date=default_start,
                 display_format="YYYY-MM-DD",
-                style={"marginRight": "24px"}
+                style={"marginRight": "8px"}
+            ),
+            dcc.Dropdown(
+                id="start-hour",
+                options=[{"label": f"{h:02d}", "value": h} for h in range(24)],
+                value=0,
+                style={"width": "70px", "marginRight": "4px"},
+                clearable=False
+            ),
+            html.Span(":", style={"margin": "0 4px", "color": "#6b7280"}),
+            dcc.Dropdown(
+                id="start-minute",
+                options=[{"label": f"{m:02d}", "value": m} for m in range(0, 60, 5)],
+                value=0,
+                style={"width": "70px", "marginRight": "16px"},
+                clearable=False
+            ),
+            html.Span("结束", className="filter-label"),
+            dcc.DatePickerSingle(
+                id="end-date-picker",
+                min_date_allowed=min_date,
+                max_date_allowed=max_date,
+                date=default_end,
+                display_format="YYYY-MM-DD",
+                style={"marginRight": "8px"}
+            ),
+            dcc.Dropdown(
+                id="end-hour",
+                options=[{"label": f"{h:02d}", "value": h} for h in range(24)],
+                value=23,
+                style={"width": "70px", "marginRight": "4px"},
+                clearable=False
+            ),
+            html.Span(":", style={"margin": "0 4px", "color": "#6b7280"}),
+            dcc.Dropdown(
+                id="end-minute",
+                options=[{"label": f"{m:02d}", "value": m} for m in range(0, 60, 5)],
+                value=55,
+                style={"width": "70px", "marginRight": "24px"},
+                clearable=False
             ),
             # 域名筛选
             html.Span("筛选域名", className="filter-label"),
@@ -440,7 +477,7 @@ def create_app(data_file=None):
                 options=[{"label": "全部域名", "value": "all"}] +
                         [{"label": d, "value": d} for d in sorted(domains)],
                 value="all",
-                style={"width": "280px"},
+                style={"width": "200px"},
                 clearable=False
             ),
             # 刷新状态提示
@@ -549,31 +586,31 @@ def create_app(data_file=None):
             Output("data-table", "data"),
         ],
         [
-            Input("date-range-picker", "start_date"),
-            Input("date-range-picker", "end_date"),
+            Input("start-date-picker", "date"),
+            Input("start-hour", "value"),
+            Input("start-minute", "value"),
+            Input("end-date-picker", "date"),
+            Input("end-hour", "value"),
+            Input("end-minute", "value"),
             Input("domain-filter", "value"),
             Input("refresh-interval", "n_intervals")
         ]
     )
-    def update_all(start_date, end_date, selected_domain, n_intervals):
+    def update_all(start_date, start_hour, start_minute, end_date, end_hour, end_minute, selected_domain, n_intervals):
         """定时刷新 + 筛选条件更新所有图表"""
-        # 转换日期为时间戳（毫秒）
-        # 日期范围: [start_date 00:00:00, end_date+1 00:00:00)
-        # 例如选择 12-08 到 12-09，实际查询 12-08 00:00:00 到 12-10 00:00:00
+        # 转换日期+时间为时间戳（毫秒）
         try:
             if start_date:
                 start_dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
-                # 开始日期从当天0点开始
-                start_dt = start_dt.replace(hour=0, minute=0, second=0)
+                start_dt = start_dt.replace(hour=start_hour or 0, minute=start_minute or 0, second=0)
                 start_time = int(start_dt.timestamp() * 1000)
             else:
                 start_time = None
 
             if end_date:
                 end_dt = datetime.strptime(end_date[:10], "%Y-%m-%d")
-                # 结束日期取次日0点（不包含）
-                end_dt = end_dt + timedelta(days=1)
-                end_dt = end_dt.replace(hour=0, minute=0, second=0)
+                # 结束时间精确到分钟
+                end_dt = end_dt.replace(hour=end_hour or 23, minute=end_minute or 59, second=59)
                 end_time = int(end_dt.timestamp() * 1000)
             else:
                 end_time = None
