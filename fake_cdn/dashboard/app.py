@@ -93,9 +93,10 @@ def process_data(records):
     data = []
     for i, record in enumerate(records):
         # 从 start_time 转换时间戳
-        timestamp = datetime.fromtimestamp(record["start_time"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
-        # 按区域数量分批（config 中有 5 个区域）
-        batch = i // 5 + 1
+        start_time_ms = record["start_time"]
+        timestamp = datetime.fromtimestamp(start_time_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        # 使用 start_time 作为 batch 标识（同一时间点的记录归为一批）
+        batch = start_time_ms
 
         row = {
             "timestamp": timestamp,
@@ -556,6 +557,8 @@ def create_app(data_file=None):
         try:
             if start_date:
                 start_dt = datetime.strptime(start_date[:10], "%Y-%m-%d")
+                # 开始日期从当天0点开始
+                start_dt = start_dt.replace(hour=0, minute=0, second=0)
                 start_time = int(start_dt.timestamp() * 1000)
             else:
                 start_time = None
