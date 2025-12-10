@@ -266,35 +266,31 @@ class MultiDimensionDistributor:
         将全局指标按维度分配
 
         策略:
-        1. 按地区权重分配
-        2. 每个地区随机选择1-2个域名
-        3. 保证总和等于全局指标
+        1. 为每个域名生成一条记录
+        2. 每个域名的指标按域名数量平均分配 (带±10%随机波动)
+        3. 地区固定为 mainland_china
         """
 
         results = []
+        num_domains = len(self.domains)
 
-        for region_info in self.regions:
-            weight = region_info["weight"]
+        for domain in self.domains:
+            # 按域名数量平均分配指标 (带±10%随机波动)
+            weight = (1.0 / num_domains) * random.uniform(0.9, 1.1)
 
-            # 按权重分配指标 (带±10%随机波动)
-            actual_weight = weight * random.uniform(0.9, 1.1)
-
-            region_metrics = {
-                k: int(v * actual_weight) if isinstance(v, int) else v
+            domain_metrics = {
+                k: int(v * weight) if isinstance(v, int) else v
                 for k, v in global_metrics.items()
             }
-
-            # 随机选择域名
-            domain = random.choice(self.domains)
 
             log_entry = {
                 "tenantId": self.config["dimensions"]["tenant_id"],
                 "start_time": timestamp_ms,
-                "country": region_info["country"],
-                "region": region_info["region"],
+                "country": "cn",
+                "region": "mainland_china",
                 "domain": domain,
                 "interval": self.config["time"]["interval_seconds"],
-                **region_metrics
+                **domain_metrics
             }
 
             results.append(log_entry)
