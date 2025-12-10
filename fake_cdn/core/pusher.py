@@ -64,15 +64,9 @@ class LogPusher:
     def _log_api_request(self, log_entry: Dict, status_code: int, response_text: str, error: str = None):
         """记录 API 请求到日志文件"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # 将 start_time 时间戳转换为可读格式
-        start_time_ms = log_entry.get("start_time", 0)
-        start_time_str = datetime.fromtimestamp(start_time_ms / 1000).strftime("%Y-%m-%d %H:%M:%S") if start_time_ms else "N/A"
-
         with open(self.api_log_file, "a", encoding="utf-8") as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"[{timestamp}] POST {self.api_config['endpoint']}\n")
-            f.write(f"Data Time: {start_time_str} (ts: {start_time_ms})\n")
             f.write(f"Request: {json.dumps(log_entry, ensure_ascii=False)}\n")
             if error:
                 f.write(f"Error: {error}\n")
