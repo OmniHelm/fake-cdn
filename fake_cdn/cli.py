@@ -90,6 +90,8 @@ def mode_realtime(config: dict, args):
     """
     实时模式: 按时间间隔实时生成并推送
     """
+    from datetime import datetime
+
     print("\n" + "=" * 60)
     print("模式: 实时推送 (Realtime)")
     print("=" * 60 + "\n")
@@ -97,12 +99,23 @@ def mode_realtime(config: dict, args):
     scheduler = RealtimeScheduler(config)
     dry_run = config["mode"].get("dry_run", True)
 
+    # 解析结束时间
+    end_datetime = None
+    if args.end_datetime:
+        try:
+            end_datetime = datetime.strptime(args.end_datetime, "%Y-%m-%dT%H:%M:%S")
+            print(f"[配置] 将在 {end_datetime.strftime('%Y-%m-%d %H:%M:%S')} 自动停止")
+        except ValueError:
+            print(f"[错误] 结束时间格式错误: {args.end_datetime}")
+            print("       正确格式: YYYY-MM-DDTHH:MM:SS (例如: 2025-12-27T23:59:59)")
+            sys.exit(1)
+
     if args.once:
         # 只执行一次
         scheduler.run_once(dry_run)
     else:
         # 持续运行
-        scheduler.run_forever(dry_run)
+        scheduler.run_forever(dry_run, end_datetime=end_datetime)
 
 
 def mode_catchup(config: dict, args):
@@ -248,6 +261,9 @@ def main():
   # 实时推送(只执行一次)
   python -m fake_cdn realtime --once
 
+  # 实时推送(指定结束时间)
+  python -m fake_cdn realtime --end-datetime 2025-12-27T23:59:59 -y
+
   # 补推历史数据
   python -m fake_cdn catchup --start-date 2025-01-01 --end-date 2025-01-31
 
@@ -292,6 +308,11 @@ def main():
     parser.add_argument(
         "--end-date",
         help="补推模式: 结束日期 (YYYY-MM-DD)"
+    )
+
+    parser.add_argument(
+        "--end-datetime",
+        help="实时模式: 结束时间 (YYYY-MM-DDTHH:MM:SS), 到达后自动停止"
     )
 
     parser.add_argument(

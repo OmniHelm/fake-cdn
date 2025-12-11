@@ -149,21 +149,39 @@ class RealtimeScheduler:
             print(f"[失败] 推送失败: {result['errors']}")
             return False
 
-    def run_forever(self, dry_run: bool = False):
+    def run_forever(self, dry_run: bool = False, end_datetime: datetime = None):
         """
         持续运行,每个时间间隔执行一次
 
         适用场景: 长期运行,模拟真实CDN节点
+
+        参数:
+            dry_run: 是否模拟运行(不真实推送)
+            end_datetime: 可选的结束时间,到达后自动停止
         """
 
         print(f"[启动] 实时调度器启动")
         print(f"[配置] 时间间隔: {self.config['time']['interval_seconds']} 秒")
         print(f"[配置] 目标带宽: {self.config['target']['bandwidth_gbps']} Gbps")
+        if end_datetime:
+            print(f"[配置] 结束时间: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 
         try:
             while True:
+                # 检查是否到达结束时间
+                if end_datetime and datetime.now() >= end_datetime:
+                    print(f"[完成] 已到达结束时间 {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}, 停止推送")
+                    self._save_state()
+                    break
+
                 # 等待到下一个整点
                 self._wait_until_next_interval()
+
+                # 再次检查结束时间(等待后可能已超时)
+                if end_datetime and datetime.now() >= end_datetime:
+                    print(f"[完成] 已到达结束时间 {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}, 停止推送")
+                    self._save_state()
+                    break
 
                 # 执行推送
                 success = self.run_once(dry_run)
