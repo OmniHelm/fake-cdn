@@ -173,15 +173,15 @@ class MetricsDerivator:
         else:
             bs_http_2xx = bs_http_4xx = bs_http_3xx = bs_http_5xx = 0
 
-        # 9. 带宽转换 (Gbps -> bps)
-        # API 期望 bw 单位是 bps (比特每秒)
-        bw_bps = int(bandwidth_gbps * 1000 * 1000 * 1000)  # Gbps -> bps
-        bs_bw_bps = int(bs_flux_bytes * 8 / interval_seconds)  # bytes -> bps
+        # 9. 带宽转换 (Gbps -> bit 总量)
+        # API 期望 bw 单位是 bit 总量，平台会自行计算 bps = bit / interval
+        bw_bits = int(bandwidth_gbps * 1000 * 1000 * 1000 * interval_seconds)  # Gbps × 秒 = bit 总量
+        bs_bw_bits = int(bs_flux_bytes * 8)  # bytes × 8 = bit 总量 (流量已是时间段内总量)
 
         return {
-            "bw": bw_bps,
+            "bw": bw_bits,
             "flux": flux_bytes,
-            "bs_bw": bs_bw_bps,
+            "bs_bw": bs_bw_bits,
             "bs_flux": bs_flux_bytes,
             "req_num": req_num,
             "hit_num": hit_num,
