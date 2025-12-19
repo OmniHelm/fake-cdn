@@ -39,12 +39,11 @@ class BandwidthCurveGenerator:
             day_of_week = (minute_of_month // 1440) % 7
             day_of_month = minute_of_month // 1440
 
-            # 1. 日周期: 凌晨低谷(0.6x), 晚高峰(1.3x)
-            # 使用正弦函数模拟,峰值在20:00左右
-            # 调整: 减少波动幅度,使95分位接近20 Gbps
-            daily_factor = 0.6 + 0.7 * (
-                0.5 + 0.5 * math.sin((hour_of_day - 6) * math.pi / 12)
-            )
+            # 1. 日周期: 凌晨低谷(0.6x), 双高峰(1.3x)
+            # 双峰模式: 午高峰(12:00) + 晚高峰(20:00)
+            noon_peak = math.sin((hour_of_day - 6) * math.pi / 12)    # 峰值12:00
+            evening_peak = math.sin((hour_of_day - 14) * math.pi / 12)  # 峰值20:00
+            daily_factor = 0.6 + 0.7 * (0.5 + 0.5 * max(noon_peak, evening_peak))
 
             # 2. 周周期: 周末略低
             weekly_factor = 0.85 if day_of_week in [5, 6] else 1.0

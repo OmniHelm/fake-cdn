@@ -62,7 +62,7 @@
   "realism": {
     "cache_hit_rate": [0.85, 0.95],
     "avg_object_size_kb": [200, 2048],
-    "origin_fail_rate": [0.001, 0.01],
+    "origin_fail_rate": [0.0001, 0.0005],
     "burst_probability": 0.0,
     "anomaly_probability": 0.001,
     "comment": "调整后参数: 禁用突发流量,使95分位接近20 Gbps"
