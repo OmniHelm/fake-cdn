@@ -98,13 +98,16 @@ def process_data(records):
         # 使用 start_time 作为 batch 标识（同一时间点的记录归为一批）
         batch = start_time_ms
 
+        # 获取时间间隔，用于将 bit 总量转换为 bps
+        interval = record.get("interval", 300)
+
         row = {
             "timestamp": timestamp,
             "batch": batch,
             "domain": record["domain"],
-            "bw_mbps": (record["bw"] or 0) / 1000000,  # bps -> Mbps
+            "bw_mbps": (record["bw"] or 0) / interval / 1000000,  # bit 总量 / interval = bps -> Mbps
             "flux_gb": (record["flux"] or 0) / (1024**3),
-            "bs_bw_mbps": (record["bs_bw"] or 0) / 1000000,  # bps -> Mbps
+            "bs_bw_mbps": (record["bs_bw"] or 0) / interval / 1000000,  # bit 总量 / interval = bps -> Mbps
             "bs_flux_gb": (record["bs_flux"] or 0) / (1024**3),
             "req_num": record["req_num"] or 0,
             "hit_num": record["hit_num"] or 0,
