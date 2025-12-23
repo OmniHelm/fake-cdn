@@ -406,7 +406,7 @@ INDEX_STRING = '''
 REFRESH_INTERVAL_MS = 30 * 1000  # 30秒
 
 
-# 登录页面 HTML
+# 登录页面 HTML (注意: CSS 花括号需要转义为 {{ }})
 LOGIN_PAGE = '''
 <!DOCTYPE html>
 <html>
@@ -418,48 +418,48 @@ LOGIN_PAGE = '''
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-        }
-        .login-container {
+        }}
+        .login-container {{
             background: #ffffff;
             border-radius: 12px;
             box-shadow: 0 20px 40px rgba(0,0,0,0.15);
             padding: 40px;
             width: 100%;
             max-width: 400px;
-        }
-        .login-header {
+        }}
+        .login-header {{
             text-align: center;
             margin-bottom: 32px;
-        }
-        .login-header h1 {
+        }}
+        .login-header h1 {{
             font-size: 24px;
             font-weight: 600;
             color: #111827;
             margin-bottom: 8px;
-        }
-        .login-header p {
+        }}
+        .login-header p {{
             font-size: 14px;
             color: #6b7280;
-        }
-        .form-group {
+        }}
+        .form-group {{
             margin-bottom: 20px;
-        }
-        .form-group label {
+        }}
+        .form-group label {{
             display: block;
             font-size: 14px;
             font-weight: 500;
             color: #374151;
             margin-bottom: 8px;
-        }
-        .form-group input {
+        }}
+        .form-group input {{
             width: 100%;
             padding: 12px 16px;
             font-size: 14px;
@@ -467,12 +467,12 @@ LOGIN_PAGE = '''
             border-radius: 8px;
             outline: none;
             transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .form-group input:focus {
+        }}
+        .form-group input:focus {{
             border-color: #3b82f6;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-        .btn-login {
+        }}
+        .btn-login {{
             width: 100%;
             padding: 12px;
             font-size: 14px;
@@ -483,11 +483,11 @@ LOGIN_PAGE = '''
             border-radius: 8px;
             cursor: pointer;
             transition: background 0.2s;
-        }
-        .btn-login:hover {
+        }}
+        .btn-login:hover {{
             background: #2563eb;
-        }
-        .error-msg {
+        }}
+        .error-msg {{
             background: #fef2f2;
             border: 1px solid #fecaca;
             color: #dc2626;
@@ -496,7 +496,7 @@ LOGIN_PAGE = '''
             font-size: 14px;
             margin-bottom: 20px;
             display: {error_display};
-        }
+        }}
     </style>
 </head>
 <body>
