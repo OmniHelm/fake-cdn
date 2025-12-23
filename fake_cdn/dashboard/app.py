@@ -6,6 +6,7 @@ CDN 推送数据可视化面板
 """
 
 import os
+import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,8 +16,34 @@ from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+from flask import session, redirect, request, Response
 
 from ..core.storage import CDNLogStorage, get_default_storage
+
+
+# ============================================================================
+# 认证配置
+# ============================================================================
+def get_auth_config():
+    """获取认证配置，从环境变量读取"""
+    password = os.environ.get("DASHBOARD_PASSWORD", "")
+    username = os.environ.get("DASHBOARD_USERNAME", "admin")
+    return {
+        "enabled": bool(password),  # 仅当设置密码时启用认证
+        "username": username,
+        "password": password,
+    }
+
+
+def verify_password(username: str, password: str) -> bool:
+    """验证用户名密码"""
+    config = get_auth_config()
+    if not config["enabled"]:
+        return True
+    # 使用常量时间比较防止时序攻击
+    correct_user = secrets.compare_digest(username, config["username"])
+    correct_pass = secrets.compare_digest(password, config["password"])
+    return correct_user and correct_pass
 
 # ============================================================================
 # 专业配色方案 (参考 Stripe/Linear 设计规范)
@@ -379,6 +406,123 @@ INDEX_STRING = '''
 REFRESH_INTERVAL_MS = 30 * 1000  # 30秒
 
 
+# 登录页面 HTML
+LOGIN_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - CDN Analytics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .login-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+        .login-header p {
+            font-size: 14px;
+            color: #6b7280;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 14px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .form-group input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #ffffff;
+            background: #3b82f6;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-login:hover {
+            background: #2563eb;
+        }
+        .error-msg {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: {error_display};
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>CDN Analytics</h1>
+            <p>请输入凭据以访问仪表板</p>
+        </div>
+        <div class="error-msg">{error_message}</div>
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" value="{username}" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-login">登录</button>
+        </form>
+    </div>
+</body>
+</html>
+'''
+
+
 def create_app(data_file=None):
     """创建 Dash 应用"""
     # 获取 SQLite 存储
@@ -404,6 +548,64 @@ def create_app(data_file=None):
     app = dash.Dash(__name__, title="CDN Analytics")
     app.index_string = INDEX_STRING
 
+    # 设置 Flask secret key 用于 session
+    app.server.secret_key = os.environ.get(
+        "DASHBOARD_SECRET_KEY",
+        secrets.token_hex(32)  # 如果未设置则生成随机 key（重启后失效）
+    )
+
+    # 获取认证配置
+    auth_config = get_auth_config()
+
+    # 注册认证路由
+    @app.server.route("/login", methods=["GET", "POST"])
+    def login():
+        if not auth_config["enabled"]:
+            return redirect("/")
+
+        error_message = ""
+        error_display = "none"
+        username = auth_config["username"]
+
+        if request.method == "POST":
+            submitted_user = request.form.get("username", "")
+            submitted_pass = request.form.get("password", "")
+
+            if verify_password(submitted_user, submitted_pass):
+                session["authenticated"] = True
+                session["username"] = submitted_user
+                return redirect("/")
+            else:
+                error_message = "用户名或密码错误"
+                error_display = "block"
+                username = submitted_user
+
+        return LOGIN_PAGE.format(
+            error_message=error_message,
+            error_display=error_display,
+            username=username
+        )
+
+    @app.server.route("/logout")
+    def logout():
+        session.clear()
+        return redirect("/login")
+
+    # 认证中间件
+    @app.server.before_request
+    def check_auth():
+        if not auth_config["enabled"]:
+            return None
+
+        # 排除静态资源和登录页面
+        path = request.path
+        if path in ["/login", "/logout"] or path.startswith("/_dash") or path.startswith("/assets"):
+            return None
+
+        # 检查是否已登录
+        if not session.get("authenticated"):
+            return redirect("/login")
+
     # 布局
     app.layout = html.Div([
         # 定时刷新组件
@@ -415,9 +617,26 @@ def create_app(data_file=None):
 
         # 标题 (动态更新)
         html.Div([
-            html.H1("CDN Analytics Dashboard"),
-            html.P(id="header-info")
-        ], className="header"),
+            html.Div([
+                html.H1("CDN Analytics Dashboard"),
+                html.P(id="header-info")
+            ], style={"flex": "1"}),
+            # 退出按钮（仅在启用认证时显示）
+            html.A(
+                "退出登录",
+                href="/logout",
+                style={
+                    "display": "inline-block" if auth_config["enabled"] else "none",
+                    "padding": "8px 16px",
+                    "fontSize": "14px",
+                    "color": "#6b7280",
+                    "textDecoration": "none",
+                    "border": "1px solid #e5e7eb",
+                    "borderRadius": "6px",
+                    "transition": "all 0.2s",
+                }
+            ) if auth_config["enabled"] else None,
+        ], className="header", style={"display": "flex", "alignItems": "center"}),
 
         # 汇总卡片容器 (动态更新)
         html.Div(id="summary-cards"),
@@ -795,6 +1014,9 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
     record_count = storage.get_record_count()
     min_time, max_time = storage.get_time_range()
 
+    # 获取认证状态
+    auth_config = get_auth_config()
+
     print("\n" + "=" * 60)
     print("  CDN Analytics Dashboard")
     print("=" * 60)
@@ -804,6 +1026,12 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
         min_dt = datetime.fromtimestamp(min_time / 1000).strftime("%Y-%m-%d %H:%M")
         max_dt = datetime.fromtimestamp(max_time / 1000).strftime("%Y-%m-%d %H:%M")
         print(f"  数据范围: {min_dt} - {max_dt}")
+    print("-" * 60)
+    if auth_config["enabled"]:
+        print(f"  登录认证: 已启用")
+        print(f"  用户名: {auth_config['username']}")
+    else:
+        print(f"  登录认证: 未启用 (设置 DASHBOARD_PASSWORD 环境变量启用)")
     print("=" * 60)
     print(f"  访问地址: http://127.0.0.1:{port}")
     print("=" * 60 + "\n")
