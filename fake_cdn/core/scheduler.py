@@ -222,8 +222,8 @@ class CatchupScheduler:
         print(f"[补推] 开始补推数据")
         print(f"[时间] {self.start_date.date()} 到 {self.end_date.date()}")
 
-        # 生成数据
-        duration_days = (self.end_date - self.start_date).days
+        # 生成数据 (包含结束日期当天，所以 +1)
+        duration_days = (self.end_date - self.start_date).days + 1
         self.config["time"]["start_date"] = self.start_date.strftime("%Y-%m-%d")
         self.config["time"]["duration_days"] = duration_days
 
