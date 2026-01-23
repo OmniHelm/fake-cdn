@@ -1,62 +1,56 @@
 {
   "target": {
-    "bandwidth_gbps": 20.0,
-    "comment": "平均带宽20Gbps = 每天211TB流量 (20 × 10.54 = 210.8 TB)"
+    "bandwidth_gbps": 40.0,
+    "comment": "新加坡40Gbps"
   },
 
   "time": {
-    "start_date": "2025-01-01",
-    "duration_days": 30,
+    "start_date": "2024-12-22",
+    "duration_days": 31,
     "interval_seconds": 300,
-    "comment": "30天, 5分钟间隔 = 8640个点 × 5地区 = 43200条"
+    "comment": "31天 (12月22日-1月21日), 5分钟间隔"
   },
 
   "dimensions": {
-    "tenant_id": "hccl",
+    "tenant_id": "770CDN26633384HCCL",
     "domains": [
-      "henghost.com",
-      "as979.net",
-      "agentdemo.west263.com",
-      "enuoidc.com",
-      "oks.llc",
-      "neburst.com",
-      "nube.sh",
-      "gomami.io",
-      "sharon.io",
-      "yxvm.com",
-      "cloud.isif.net",
-      "fxtransit.io",
-      "lemlist.com",
-      "aweber.com",
-      "cdnsun.com",
-      "neon.com",
-      "xata.io",
-      "kraken.io",
-      "blowfishstudios.com",
-      "mossmouth.com",
-      "blendomgames.com",
-      "extremelyok.com",
-      "fullbrightcompany.com",
-      "mobius.digital",
-      "deckninegames.com",
-      "doinksoft.com",
-      "megacrit.com",
-      "freelivesgames.com",
-      "10tons.com",
-      "steelwoolstudios.com",
-      "freebirdgames.com",
-      "benchling.com",
-      "klaviyo.com",
-      "personio.com"
+      "shoplazza.com",
+      "shopline.com",
+      "ueeshop.com",
+      "shopyy.com",
+      "banmaerp.com",
+      "cnfth.com",
+      "m123.com",
+      "chillyroom.com",
+      "patheagames.com",
+      "pathea.net",
+      "coconut.is",
+      "qcplay.com",
+      "qingcigame.com",
+      "indienova.com",
+      "yhdm.one",
+      "imomoe.one",
+      "yhmb.cc",
+      "agedm.io",
+      "dilidili.io",
+      "jcex.com",
+      "yuntue.com",
+      "4px.com",
+      "chukou1.com",
+      "goodcang.com",
+      "eccang.com",
+      "hotlistmarketing.com",
+      "socialbook.io",
+      "noxinfluencer.com",
+      "insmarkmcn.com",
+      "wotokol.com",
+      "meetsocial.com",
+      "nuope.com"
     ],
     "regions": [
-      {"country": "cn", "region": "mainland_china", "weight": 0.2},
-      {"country": "cn", "region": "mainland_china", "weight": 0.2},
-      {"country": "cn", "region": "mainland_china", "weight": 0.2},
-      {"country": "cn", "region": "mainland_china", "weight": 0.2},
-      {"country": "cn", "region": "mainland_china", "weight": 0.2}
+      {"country": "sg", "region": "asia", "weight": 1.0}
     ],
-    "comment": "真实CDN域名+多地区分布"
+    "comment": "新加坡节点"
   },
 
   "realism": {
@@ -65,7 +59,7 @@
     "origin_fail_rate": [0.0001, 0.0005],
     "burst_probability": 0.0,
     "anomaly_probability": 0.001,
-    "comment": "调整后参数: 禁用突发流量,使95分位接近20 Gbps"
+    "comment": "调整后参数: 禁用突发流量"
   },
 
   "api": {
