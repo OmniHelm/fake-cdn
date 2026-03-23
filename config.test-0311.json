@@ -2,21 +2,21 @@
   "target": {
     "mode": "flux_window",
     "total_flux": {
-      "value": 2.1,
-      "unit": "PB",
+      "value": 67.742,
+      "unit": "TB",
       "base": 1000
     },
     "profile": "enterprise_b2b",
     "random_seed": 20260311,
-    "comment": "以总流量+时间窗口为目标，生成更贴近真实业务的 CDN 推送数据"
+    "comment": "1天测试: 2.1PB / 31天 ≈ 67.742 TB/天"
   },
 
   "time": {
     "start_datetime": "2026-03-11 00:00:00",
-    "end_datetime": "2026-04-10 23:55:00",
+    "end_datetime": "2026-03-11 23:55:00",
     "interval_seconds": 300,
     "timezone": "Asia/Shanghai",
-    "comment": "31天，5分钟间隔，共 8928 个时间点；结束时间为包含式"
+    "comment": "1天测试，288 个时间点"
   },
 
   "dimensions": {
@@ -63,8 +63,7 @@
         "region": "mainland_china",
         "weight": 1.0
       }
-    ],
-    "comment": "域名默认等权；如需更真实业务结构，可将 domains 改为带 weight/profile 的对象数组"
+    ]
   },
 
   "realism": {
@@ -93,8 +92,7 @@
       "max": 0.0005
     },
     "anomaly_probability": 0.001,
-    "events": [],
-    "comment": "工作日高于周末，日内双峰，平滑噪声，支持后续配置事件窗口"
+    "events": []
   },
 
   "api": {
@@ -105,15 +103,13 @@
     },
     "timeout": 10,
     "retry": 3,
-    "batch_size": 10,
-    "comment": "通过环境变量配置: CDN_API_ENDPOINT, CDN_API_VIP"
+    "batch_size": 10
   },
 
   "mode": {
     "run_mode": "simulation",
     "dry_run": false,
     "save_local": true,
-    "output_dir": "./output",
-    "comment": "默认 dry-run，避免误推送到真实环境"
+    "output_dir": "./output"
   }
 }
