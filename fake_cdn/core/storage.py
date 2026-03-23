@@ -276,7 +276,11 @@ class CDNLogStorage:
 
 
 def get_default_storage() -> CDNLogStorage:
-    """获取默认存储实例"""
+    """获取默认存储实例，支持通过环境变量覆盖数据库路径。"""
+    custom_db_path = os.environ.get("FAKE_CDN_DB_PATH")
+    if custom_db_path:
+        return CDNLogStorage(custom_db_path)
+
     from pathlib import Path
     project_root = Path(__file__).parent.parent.parent
     db_path = project_root / "output" / "cdn_logs.db"

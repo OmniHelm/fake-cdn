@@ -1,65 +1,100 @@
 {
   "target": {
-    "bandwidth_gbps": 40.0,
-    "comment": "新加坡40Gbps"
+    "mode": "flux_window",
+    "total_flux": {
+      "value": 2.1,
+      "unit": "PB",
+      "base": 1000
+    },
+    "profile": "enterprise_b2b",
+    "random_seed": 20260311,
+    "comment": "以总流量+时间窗口为目标，生成更贴近真实业务的 CDN 推送数据"
   },
 
   "time": {
-    "start_date": "2024-12-22",
-    "duration_days": 31,
+    "start_datetime": "2026-03-11 00:00:00",
+    "end_datetime": "2026-04-10 23:55:00",
     "interval_seconds": 300,
-    "comment": "31天 (12月22日-1月21日), 5分钟间隔"
+    "timezone": "Asia/Shanghai",
+    "comment": "31天，5分钟间隔，共 8928 个时间点；结束时间为包含式"
   },
 
   "dimensions": {
-    "tenant_id": "770CDN26633384HCCL",
+    "tenant_id": "hccl",
     "domains": [
-      "shoplazza.com",
-      "shopline.com",
-      "ueeshop.com",
-      "shopyy.com",
-      "banmaerp.com",
-      "cnfth.com",
-      "m123.com",
-      "chillyroom.com",
-      "patheagames.com",
-      "pathea.net",
-      "coconut.is",
-      "qcplay.com",
-      "qingcigame.com",
-      "indienova.com",
-      "yhdm.one",
-      "imomoe.one",
-      "yhmb.cc",
-      "agedm.io",
-      "dilidili.io",
-      "jcex.com",
-      "yuntue.com",
-      "4px.com",
-      "chukou1.com",
-      "goodcang.com",
-      "eccang.com",
-      "hotlistmarketing.com",
-      "socialbook.io",
-      "noxinfluencer.com",
-      "insmarkmcn.com",
-      "wotokol.com",
-      "meetsocial.com",
-      "nuope.com"
+      "henghost.com",
+      "as979.net",
+      "agentdemo.west263.com",
+      "enuoidc.com",
+      "oks.llc",
+      "neburst.com",
+      "nube.sh",
+      "gomami.io",
+      "sharon.io",
+      "yxvm.com",
+      "cloud.isif.net",
+      "fxtransit.io",
+      "lemlist.com",
+      "aweber.com",
+      "cdnsun.com",
+      "neon.com",
+      "xata.io",
+      "kraken.io",
+      "blowfishstudios.com",
+      "mossmouth.com",
+      "blendomgames.com",
+      "extremelyok.com",
+      "fullbrightcompany.com",
+      "mobius.digital",
+      "deckninegames.com",
+      "doinksoft.com",
+      "megacrit.com",
+      "freelivesgames.com",
+      "10tons.com",
+      "steelwoolstudios.com",
+      "freebirdgames.com",
+      "benchling.com",
+      "klaviyo.com",
+      "personio.com"
     ],
     "regions": [
-      {"country": "sg", "region": "asia", "weight": 1.0}
+      {
+        "country": "cn",
+        "region": "mainland_china",
+        "weight": 1.0
+      }
     ],
-    "comment": "新加坡节点"
+    "comment": "域名默认等权；如需更真实业务结构，可将 domains 改为带 weight/profile 的对象数组"
   },
 
   "realism": {
-    "cache_hit_rate": [0.85, 0.95],
-    "avg_object_size_kb": [200, 2048],
-    "origin_fail_rate": [0.0001, 0.0005],
-    "burst_probability": 0.0,
+    "weekday_factors": {
+      "mon": 1.08,
+      "tue": 1.1,
+      "wed": 1.12,
+      "thu": 1.08,
+      "fri": 1.02,
+      "sat": 0.82,
+      "sun": 0.78
+    },
+    "day_noise_ratio": 0.03,
+    "slot_noise_ratio": 0.05,
+    "month_edge_boost": 0.05,
+    "cache_hit_rate": {
+      "min": 0.88,
+      "max": 0.95
+    },
+    "avg_object_size_kb": {
+      "min": 200,
+      "max": 2048
+    },
+    "origin_fail_rate": {
+      "min": 0.0001,
+      "max": 0.0005
+    },
     "anomaly_probability": 0.001,
-    "comment": "调整后参数: 禁用突发流量"
+    "events": [],
+    "comment": "工作日高于周末，日内双峰，平滑噪声，支持后续配置事件窗口"
   },
 
   "api": {
@@ -79,6 +114,6 @@
     "dry_run": true,
     "save_local": true,
     "output_dir": "./output",
-    "comment": "simulation=模拟运行生成全月数据, realtime=实时推送, dry_run=true时不真实推送"
+    "comment": "默认 dry-run，避免误推送到真实环境"
   }
 }

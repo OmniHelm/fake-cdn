@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
     "requests>=2.31.0",
     "urllib3>=2.0.0",
+    "backports-zoneinfo>=0.2.1; python_version < '3.9'",
 ]
 
 [project.optional-dependencies]

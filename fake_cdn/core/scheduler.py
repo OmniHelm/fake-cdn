@@ -1,238 +1,221 @@
-"""
-实时推送调度器
-用于按时间间隔实时生成并推送日志
-"""
+from __future__ import annotations
+
+"""调度器：支持 catchup 与基于计划的 realtime。"""
 
 import json
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, List, Optional
 
-from fake_cdn.core.generator import CDNLogGenerator, BandwidthCurveGenerator
-from fake_cdn.core.pusher import LogPusher, LocalSaver
+from fake_cdn.core.generator import (
+    CDNLogGenerator,
+    FluxPlanPoint,
+    TimeWindowBuilder,
+    get_output_dir,
+    normalize_config,
+    parse_datetime_in_timezone,
+    parse_timezone,
+)
+from fake_cdn.core.pusher import LocalSaver, LogPusher
 
 
 class RealtimeScheduler:
     """
-    实时调度器
+    实时调度器。
 
-    模式: 每5分钟执行一次,生成当前时间点的日志并推送
-
-    状态管理: 记录已推送的时间点,支持断点续传
+    设计要点：
+    1. 首次启动生成整窗计划并持久化到 output/traffic_plan.json
+    2. 每次按“当前对齐时间点”查找计划中的流量值
+    3. 推送成功后记录到 state.json，避免重复推送
     """
 
-    def __init__(self, config: dict, state_file: str = "./state.json", output_dir: str = "./output"):
-        self.config = config
-        self.state_file = state_file
-        self.output_dir = output_dir
+    def __init__(
+        self,
+        config: Dict,
+        state_file: Optional[str] = None,
+        plan_file: Optional[str] = None,
+        output_dir: Optional[str] = None,
+    ):
+        self.config = normalize_config(config)
+        self.output_dir = output_dir or get_output_dir(self.config)
+        os.makedirs(self.output_dir, exist_ok=True)
 
-        self.generator = CDNLogGenerator(config)
-        self.pusher = LogPusher(config)
+        self.state_file = state_file or os.path.join(self.output_dir, "state.json")
+        self.plan_file = plan_file or os.path.join(self.output_dir, "traffic_plan.json")
 
-        # 加载状态
+        self.time_builder = TimeWindowBuilder(self.config)
+        self.timezone = parse_timezone(self.config["time"]["timezone"])
+        self.generator = CDNLogGenerator(self.config)
+        self.pusher = LogPusher(self.config)
+        self.plan_id = self._build_plan_id()
         self.state = self._load_state()
+        self.plan_points = self._load_or_create_plan()
+        self.plan_index = {point.timestamp_ms: point for point in self.plan_points}
 
-        # 预生成带宽曲线(避免每次重新生成)
-        self.bandwidth_curve = None
+    def _build_plan_id(self) -> str:
+        return "{start}_{end}_{seed}".format(
+            start=self.config["time"]["start_datetime"].replace(" ", "T"),
+            end=self.config["time"]["end_datetime"].replace(" ", "T"),
+            seed=self.config["target"]["random_seed"],
+        )
 
     def _load_state(self) -> Dict:
-        """加载调度器状态"""
         if os.path.exists(self.state_file):
-            with open(self.state_file, 'r') as f:
-                state = json.load(f)
-                print(f"[状态] 加载状态: 已推送 {len(state.get('pushed_timestamps', []))} 个时间点")
+            with open(self.state_file, "r", encoding="utf-8") as file:
+                state = json.load(file)
+            if state.get("plan_id") == self.plan_id:
+                pushed = state.get("pushed_timestamps", [])
+                print(f"[状态] 已加载 state.json，已推送 {len(pushed)} 个时间点")
                 return state
-        else:
-            return {
-                "pushed_timestamps": [],
-                "start_date": self.config["time"]["start_date"],
-                "current_index": 0
-            }
 
-    def _save_state(self):
-        """保存调度器状态"""
-        with open(self.state_file, 'w') as f:
-            json.dump(self.state, f, indent=2)
+        return {
+            "plan_id": self.plan_id,
+            "pushed_timestamps": [],
+        }
+
+    def _save_state(self) -> None:
+        with open(self.state_file, "w", encoding="utf-8") as file:
+            json.dump(self.state, file, ensure_ascii=False, indent=2)
+
+    def _load_or_create_plan(self) -> List[FluxPlanPoint]:
+        if os.path.exists(self.plan_file):
+            with open(self.plan_file, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+            if payload.get("plan_id") == self.plan_id:
+                print(f"[计划] 复用已有流量计划: {self.plan_file}")
+                return [
+                    FluxPlanPoint(timestamp_ms=int(item["timestamp_ms"]), flux_bytes=int(item["flux_bytes"]))
+                    for item in payload.get("points", [])
+                ]
+
+        print("[计划] 未找到可复用计划，开始生成...")
+        points = self.generator.generate_window_plan()
+        payload = {
+            "plan_id": self.plan_id,
+            "time": self.config["time"],
+            "points": [
+                {"timestamp_ms": point.timestamp_ms, "flux_bytes": point.flux_bytes}
+                for point in points
+            ],
+        }
+        with open(self.plan_file, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+        print(f"[计划] 已保存到: {self.plan_file}")
+        return points
 
     def _align_to_interval(self, dt: datetime) -> datetime:
-        """
-        对齐到时间间隔整点
-
-        例如: interval=300秒(5分钟)
-        14:03:27 -> 14:00:00
-        14:07:56 -> 14:05:00
-        """
-        interval = self.config["time"]["interval_seconds"]
+        interval = int(self.config["time"]["interval_seconds"])
         timestamp = int(dt.timestamp())
-        aligned_timestamp = (timestamp // interval) * interval
-        return datetime.fromtimestamp(aligned_timestamp)
+        aligned = (timestamp // interval) * interval
+        return datetime.fromtimestamp(aligned, tz=self.timezone)
 
-    def _wait_until_next_interval(self):
-        """等待到下一个时间间隔整点"""
-        interval = self.config["time"]["interval_seconds"]
-        now = datetime.now()
+    def _wait_until_next_interval(self) -> None:
+        interval = int(self.config["time"]["interval_seconds"])
+        now = datetime.now(self.timezone)
         aligned = self._align_to_interval(now)
         next_time = aligned + timedelta(seconds=interval)
-
         wait_seconds = (next_time - now).total_seconds()
-
         if wait_seconds > 0:
-            print(f"[等待] 下次执行时间: {next_time.strftime('%Y-%m-%d %H:%M:%S')} (等待 {wait_seconds:.1f} 秒)")
+            print(f"[等待] 下次执行时间: {next_time.strftime('%Y-%m-%d %H:%M:%S %Z')} (等待 {wait_seconds:.1f} 秒)")
             time.sleep(wait_seconds)
 
     def run_once(self, dry_run: bool = False) -> bool:
-        """
-        执行一次推送任务
-
-        返回: 是否成功
-        """
-
-        # 1. 确定当前时间点
-        current_time = self._align_to_interval(datetime.now())
+        current_time = self._align_to_interval(datetime.now(self.timezone))
         timestamp_ms = int(current_time.timestamp() * 1000)
 
-        # 检查是否已推送
         if timestamp_ms in self.state["pushed_timestamps"]:
-            print(f"[跳过] 时间点 {current_time} 已推送过")
+            print(f"[跳过] {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 已推送")
             return True
 
-        print(f"[执行] 开始推送 {current_time.strftime('%Y-%m-%d %H:%M:%S')} 的日志")
-
-        # 2. 生成带宽曲线(如果还没生成)
-        if self.bandwidth_curve is None:
-            print("[初始化] 预生成带宽曲线...")
-            curve_gen = BandwidthCurveGenerator(
-                self.config["target"]["bandwidth_gbps"],
-                self.config
-            )
-            self.bandwidth_curve = curve_gen.generate(
-                self.config["time"]["duration_days"],
-                self.config["time"]["interval_seconds"]
-            )
-
-        # 3. 获取当前时间点的带宽值
-        index = self.state["current_index"]
-        if index >= len(self.bandwidth_curve):
-            print("[完成] 已推送完所有时间点")
+        plan_point = self.plan_index.get(timestamp_ms)
+        if plan_point is None:
+            print(f"[完成] 当前时间点 {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 不在配置窗口内")
             return False
 
-        bandwidth_gbps = self.bandwidth_curve[index]
-
-        # 4. 生成指标
-        metrics = self.generator.metrics_deriver.derive(
-            bandwidth_gbps,
-            self.config["time"]["interval_seconds"]
-        )
-
-        # 5. 注入异常
-        metrics = self.generator.anomaly_injector.inject(metrics, timestamp_ms)
-
-        # 6. 分配到多维度
-        logs = self.generator.distributor.distribute(metrics, timestamp_ms)
-
-        # 7. 推送
+        print(f"[执行] 推送 {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 的日志")
+        logs = self.generator.generate_logs_for_slot(plan_point)
         result = self.pusher.push_batch(logs, dry_run)
 
-        if result["success"] > 0:
-            # 保存到本地数据库 (供 dashboard 展示)
-            LocalSaver.save_logs(logs, self.output_dir)
-
-            # 更新状态
+        if result["success"] == len(logs):
+            if self.config["mode"].get("save_local", True):
+                LocalSaver.save_logs(logs, self.output_dir)
             self.state["pushed_timestamps"].append(timestamp_ms)
-            self.state["current_index"] = index + 1
+            self.state["pushed_timestamps"] = sorted(set(self.state["pushed_timestamps"]))
             self._save_state()
-
-            print(f"[成功] 推送 {result['success']} 条日志, 带宽: {bandwidth_gbps:.2f} Gbps")
+            print(f"[成功] 推送 {result['success']} 条日志，时间点流量 {plan_point.flux_bytes:,} Byte")
             return True
-        else:
-            print(f"[失败] 推送失败: {result['errors']}")
-            return False
 
-    def run_forever(self, dry_run: bool = False, end_datetime: datetime = None):
-        """
-        持续运行,每个时间间隔执行一次
+        print(f"[失败] 推送失败，成功 {result['success']} 条，失败 {result['failed']} 条")
+        return False
 
-        适用场景: 长期运行,模拟真实CDN节点
-
-        参数:
-            dry_run: 是否模拟运行(不真实推送)
-            end_datetime: 可选的结束时间,到达后自动停止
-        """
-
-        print(f"[启动] 实时调度器启动")
-        print(f"[配置] 时间间隔: {self.config['time']['interval_seconds']} 秒")
-        print(f"[配置] 目标带宽: {self.config['target']['bandwidth_gbps']} Gbps")
+    def run_forever(self, dry_run: bool = False, end_datetime: Optional[datetime] = None) -> None:
+        print("[启动] 实时调度器启动")
+        print(f"[配置] 窗口: {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}")
+        print(f"[配置] 粒度: {self.config['time']['interval_seconds']} 秒")
         if end_datetime:
-            print(f"[配置] 结束时间: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"[配置] 结束时间: {end_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
         try:
             while True:
-                # 检查是否到达结束时间
-                if end_datetime and datetime.now() >= end_datetime:
-                    print(f"[完成] 已到达结束时间 {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}, 停止推送")
+                if end_datetime and datetime.now(self.timezone) >= end_datetime:
+                    print("[完成] 已到达结束时间，停止推送")
                     self._save_state()
                     break
 
-                # 等待到下一个整点
                 self._wait_until_next_interval()
 
-                # 再次检查结束时间(等待后可能已超时)
-                if end_datetime and datetime.now() >= end_datetime:
-                    print(f"[完成] 已到达结束时间 {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}, 停止推送")
+                if end_datetime and datetime.now(self.timezone) >= end_datetime:
+                    print("[完成] 已到达结束时间，停止推送")
                     self._save_state()
                     break
 
-                # 执行推送
                 success = self.run_once(dry_run)
-
                 if not success:
-                    print("[警告] 推送失败,1分钟后重试")
-                    time.sleep(60)
-
+                    # 如果当前时间点不在窗口内，说明计划已结束或尚未开始，此时退出即可。
+                    self._save_state()
+                    break
         except KeyboardInterrupt:
-            print("\n[停止] 收到中断信号,正在停止...")
+            print("\n[停止] 收到中断信号，状态已保存")
             self._save_state()
-            print("[停止] 状态已保存")
 
 
 class CatchupScheduler:
-    """
-    补推调度器
+    """补推指定时间窗口的数据。"""
 
-    用于补推历史数据(例如从1月1日开始补推30天的数据)
-    """
+    def __init__(self, config: Dict, start_datetime: Optional[str] = None, end_datetime: Optional[str] = None):
+        self.base_config = normalize_config(config)
+        self.timezone = parse_timezone(self.base_config["time"]["timezone"])
+        self.output_dir = get_output_dir(self.base_config)
+        os.makedirs(self.output_dir, exist_ok=True)
 
-    def __init__(self, config: dict, start_date: str, end_date: str):
-        self.config = config
-        self.start_date = datetime.strptime(start_date, "%Y-%m-%d")
-        self.end_date = datetime.strptime(end_date, "%Y-%m-%d")
-        self.output_dir = config.get("output", {}).get("dir", "./output")
+        start_dt = (
+            parse_datetime_in_timezone(start_datetime, self.timezone)
+            if start_datetime
+            else parse_datetime_in_timezone(self.base_config["time"]["start_datetime"], self.timezone)
+        )
+        end_dt = (
+            parse_datetime_in_timezone(end_datetime, self.timezone)
+            if end_datetime
+            else parse_datetime_in_timezone(self.base_config["time"]["end_datetime"], self.timezone)
+        )
 
-        self.generator = CDNLogGenerator(config)
-        self.pusher = LogPusher(config)
+        self.config = json.loads(json.dumps(self.base_config))
+        self.config["time"]["start_datetime"] = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+        self.config["time"]["end_datetime"] = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+        self.config = normalize_config(self.config)
+        self.generator = CDNLogGenerator(self.config)
+        self.pusher = LogPusher(self.config)
 
-    def run(self, dry_run: bool = False, delay_ms: int = 100):
-        """
-        补推指定时间段的数据
+    def run(self, dry_run: bool = False) -> Dict:
+        print("[补推] 开始补推数据")
+        print(f"[时间] {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}")
 
-        delay_ms: 每条日志之间的延迟(毫秒),避免打爆API
-        """
+        logs, stats = self.generator.generate_window_logs()
+        if self.config["mode"].get("save_local", True):
+            LocalSaver.save_logs(logs, self.output_dir)
+            LocalSaver.save_stats(stats, self.output_dir, "stats.json")
+            LocalSaver.save_flux_curve(self.generator.generate_window_plan(), self.output_dir, "flux_curve.csv")
 
-        print(f"[补推] 开始补推数据")
-        print(f"[时间] {self.start_date.date()} 到 {self.end_date.date()}")
-
-        # 生成数据 (包含结束日期当天，所以 +1)
-        duration_days = (self.end_date - self.start_date).days + 1
-        self.config["time"]["start_date"] = self.start_date.strftime("%Y-%m-%d")
-        self.config["time"]["duration_days"] = duration_days
-
-        logs, stats = self.generator.generate_full_month()
-
-        # 保存到本地数据库 (供 dashboard 展示)
-        LocalSaver.save_logs(logs, self.output_dir)
-
-        # 推送到 API (如果不是 dry_run)
         self.pusher.push_all(logs, dry_run, show_progress=True)
-
         return stats
