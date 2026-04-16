@@ -25,53 +25,84 @@ from ..core.storage import CDNLogStorage, get_default_storage
 # 认证配置
 # ============================================================================
 def get_auth_config():
-    """获取认证配置，从环境变量读取"""
+    """获取认证配置，从环境变量读取
+
+    支持多用户:
+    - DASHBOARD_USERNAME / DASHBOARD_PASSWORD: 主用户（默认 admin）
+    - DASHBOARD_USERS: JSON 格式额外用户，如 {"viewer":"pass123","ops":"pass456"}
+    """
     password = os.environ.get("DASHBOARD_PASSWORD", "")
     username = os.environ.get("DASHBOARD_USERNAME", "admin")
+
+    # 构建用户字典
+    users = {}
+    if password:
+        users[username] = password
+
+    # 解析额外用户
+    extra_users = os.environ.get("DASHBOARD_USERS", "")
+    if extra_users:
+        import json
+        try:
+            parsed = json.loads(extra_users)
+            if isinstance(parsed, dict):
+                users.update(parsed)
+        except json.JSONDecodeError:
+            print(f"[警告] DASHBOARD_USERS 格式错误，应为 JSON 对象")
+
     return {
-        "enabled": bool(password),  # 仅当设置密码时启用认证
-        "username": username,
-        "password": password,
+        "enabled": bool(users),
+        "users": users,
     }
 
 
 def verify_password(username: str, password: str) -> bool:
-    """验证用户名密码"""
+    """验证用户名密码（支持多用户）"""
     config = get_auth_config()
     if not config["enabled"]:
         return True
-    # 使用常量时间比较防止时序攻击
-    correct_user = secrets.compare_digest(username, config["username"])
-    correct_pass = secrets.compare_digest(password, config["password"])
-    return correct_user and correct_pass
+    # 遍历所有用户，使用常量时间比较防止时序攻击
+    for valid_user, valid_pass in config["users"].items():
+        correct_user = secrets.compare_digest(username, valid_user)
+        correct_pass = secrets.compare_digest(password, valid_pass)
+        if correct_user and correct_pass:
+            return True
+    return False
 
 # ============================================================================
 # 专业配色方案 (参考 Stripe/Linear 设计规范)
 # ============================================================================
 COLORS = {
+    # 侧边栏
+    "sidebar_bg": "#0f172a",       # Slate-900
+    "sidebar_hover": "#1e293b",    # Slate-800
+    "sidebar_active": "#334155",   # Slate-700
+    "sidebar_text": "#94a3b8",     # Slate-400
+    "sidebar_accent": "#38bdf8",   # Sky-400
+
     # 基础色
-    "bg": "#f9fafb",
+    "bg": "#f1f5f9",               # Slate-100
     "card": "#ffffff",
-    "border": "#e5e7eb",
+    "border": "#e2e8f0",           # Slate-200
 
     # 文字
-    "text_primary": "#111827",
-    "text_secondary": "#6b7280",
-    "text_muted": "#9ca3af",
+    "text_primary": "#0f172a",     # Slate-900
+    "text_secondary": "#475569",   # Slate-600
+    "text_muted": "#94a3b8",       # Slate-400
 
     # 语义色
-    "primary": "#3b82f6",      # 蓝 - 主要数据
-    "success": "#10b981",      # 绿 - 正向指标
-    "warning": "#f59e0b",      # 橙 - 警告
-    "danger": "#ef4444",       # 红 - 错误
-    "info": "#06b6d4",         # 青 - 信息
-    "purple": "#8b5cf6",       # 紫 - 辅助
+    "primary": "#0ea5e9",          # Sky-500
+    "success": "#10b981",          # 绿 - 正向指标
+    "warning": "#f59e0b",          # 橙 - 警告
+    "danger": "#ef4444",           # 红 - 错误
+    "info": "#06b6d4",             # 青 - 信息
+    "purple": "#8b5cf6",           # 紫 - 辅助
 
     # 图表专用
-    "chart_primary": "#3b82f6",
+    "chart_primary": "#0ea5e9",
     "chart_secondary": "#10b981",
     "chart_tertiary": "#8b5cf6",
-    "chart_grid": "#f3f4f6",
+    "chart_grid": "#f1f5f9",
 }
 
 # HTTP 状态码配色
@@ -172,11 +203,17 @@ def get_default_date_range(storage: CDNLogStorage):
     return today, today
 
 
-def create_metric_card(title, value, subtitle=None, color=None):
+def create_metric_card(title, value, subtitle=None, color=None, trend=None):
     """创建单个指标卡片"""
+    value_children = [value]
+    if trend is not None and abs(trend) >= 0.1:
+        arrow = "\u25b2" if trend > 0 else "\u25bc"
+        cls = "metric-trend up" if trend > 0 else "metric-trend down"
+        value_children.append(html.Span(f"{arrow} {abs(trend):.1f}%", className=cls))
+
     return html.Div([
         html.Div(title, className="metric-label"),
-        html.Div(value, className="metric-value", style={"color": color} if color else {}),
+        html.Div(value_children, className="metric-value", style={"color": color} if color else {}),
         html.Div(subtitle, className="metric-subtitle") if subtitle else None,
     ], className="metric-card")
 
@@ -191,14 +228,12 @@ def create_summary_cards(df):
     avg_bw = time_agg["bw_mbps"].mean()  # 平均带宽
 
     # 计算日平均和日95
-    # 95计费：每天288个点，去掉最高5%（约14个），取第273个值
     time_agg["date"] = time_agg["timestamp"].dt.date
 
     def calc_95_billing(bw_series):
         """计算95计费值：排序后取第95%位置的值"""
         sorted_bw = bw_series.sort_values(ascending=True).values
         n = len(sorted_bw)
-        # 取第95%位置，即去掉最高5%后的最大值
         idx = int(n * 0.95) - 1
         if idx < 0:
             idx = 0
@@ -210,22 +245,37 @@ def create_summary_cards(df):
         "bw_mbps": ["mean", calc_95_billing]
     })
     daily_stats.columns = ["daily_avg", "daily_p95"]
-    daily_avg_bw = daily_stats["daily_avg"].mean()  # 日平均的均值
-    daily_p95_bw = daily_stats["daily_p95"].mean()  # 日95的均值
+    daily_avg_bw = daily_stats["daily_avg"].mean()
+    daily_p95_bw = daily_stats["daily_p95"].mean()
 
     total_flux = df["flux_gb"].sum()
-    total_requests = df["req_num"].sum()
     avg_hit_rate = df["hit_rate"].mean()
-    total_bs_fail = df["bs_fail_num"].sum()
-    total_bs = df["bs_num"].sum()
+
+    # 计算趋势：将时间范围分为前后两半比较
+    mid_batch = df["batch"].quantile(0.5)
+    first_half = df[df["batch"] <= mid_batch]
+    second_half = df[df["batch"] > mid_batch]
+
+    def calc_trend(first, second, col, agg="sum"):
+        if first.empty or second.empty:
+            return None
+        v1 = first[col].sum() if agg == "sum" else first[col].mean()
+        v2 = second[col].sum() if agg == "sum" else second[col].mean()
+        if v1 == 0:
+            return None
+        return ((v2 / v1) - 1) * 100
+
+    bw_trend = calc_trend(first_half, second_half, "bw_mbps", "mean")
+    flux_trend = calc_trend(first_half, second_half, "flux_gb")
+    hit_trend = calc_trend(first_half, second_half, "hit_rate", "mean")
 
     return html.Div([
-        create_metric_card("峰值带宽", f"{peak_bw/1000:.1f} Gbps", f"平均 {avg_bw/1000:.1f} Gbps"),
+        create_metric_card("峰值带宽", f"{peak_bw/1000:.1f} Gbps", f"平均 {avg_bw/1000:.1f} Gbps", trend=bw_trend),
         create_metric_card("日平均带宽", f"{daily_avg_bw/1000:.1f} Gbps", "每日平均值"),
-        create_metric_card("日95带宽", f"{daily_p95_bw/1000:.1f} Gbps", "每日95分位值", COLORS["primary"]),
-        create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量"),
+        create_metric_card("日95带宽", f"{daily_p95_bw/1000:.1f} Gbps", "95th 分位计费带宽", COLORS["primary"]),
+        create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量", trend=flux_trend),
         create_metric_card("缓存命中率", f"{avg_hit_rate:.1f}%", "平均命中比例",
-                          COLORS["success"] if avg_hit_rate >= 90 else COLORS["warning"]),
+                          COLORS["success"] if avg_hit_rate >= 90 else COLORS["warning"], trend=hit_trend),
     ], className="metrics-grid")
 
 
@@ -238,6 +288,7 @@ def apply_chart_style(fig, title):
         plot_bgcolor="rgba(0,0,0,0)",
         margin={"t": 40, "b": 40, "l": 50, "r": 20},
         hovermode="x unified",
+        hoverlabel={"bgcolor": "#0f172a", "font_size": 12, "font_color": "#f8fafc", "bordercolor": "#334155"},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1, "font": {"size": 11}},
     )
     fig.update_xaxes(
@@ -265,94 +316,327 @@ INDEX_STRING = '''
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
         <style>
             * { box-sizing: border-box; }
 
             body {
                 font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background-color: #f9fafb;
+                background-color: #f1f5f9;
                 margin: 0;
-                padding: 24px;
-                color: #111827;
+                padding: 0;
+                color: #0f172a;
                 line-height: 1.5;
+                height: 100vh;
+                overflow: hidden;
             }
 
-            /* 头部 */
-            .header {
-                margin-bottom: 24px;
+            .material-symbols-outlined {
+                font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+                font-size: 20px;
+                vertical-align: middle;
             }
-            .header h1 {
-                font-size: 24px;
+
+            /* ===== Shell 布局 ===== */
+            .app-shell {
+                display: flex;
+                height: 100vh;
+                overflow: hidden;
+            }
+
+            /* ===== 侧边栏 ===== */
+            .sidebar {
+                width: 240px;
+                min-width: 240px;
+                background: #0f172a;
+                display: flex;
+                flex-direction: column;
+                overflow-y: auto;
+                overflow-x: hidden;
+                z-index: 10;
+            }
+            .sidebar-logo {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 20px 20px 24px;
+            }
+            .sidebar-logo-text {
+                font-size: 15px;
                 font-weight: 600;
-                color: #111827;
-                margin: 0 0 4px 0;
+                color: #f1f5f9;
+                white-space: nowrap;
             }
-            .header p {
-                font-size: 14px;
-                color: #6b7280;
-                margin: 0;
+            .sidebar-section {
+                padding: 16px 20px 8px;
+                font-size: 11px;
+                font-weight: 600;
+                color: #475569;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+                white-space: nowrap;
+            }
+            .sidebar-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 9px 20px;
+                color: #94a3b8;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: default;
+                border-left: 3px solid transparent;
+                transition: all 0.15s ease;
+                white-space: nowrap;
+            }
+            .sidebar-item:hover {
+                background: #1e293b;
+                color: #cbd5e1;
+            }
+            .sidebar-item.active {
+                background: #1e293b;
+                color: #f1f5f9;
+                border-left-color: #38bdf8;
+            }
+            .sidebar-item .material-symbols-outlined {
+                font-size: 20px;
+                opacity: 0.7;
+                flex-shrink: 0;
+            }
+            .sidebar-item.active .material-symbols-outlined {
+                opacity: 1;
+                color: #38bdf8;
+            }
+            .sidebar-item span:last-child {
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .sidebar-footer {
+                margin-top: auto;
+                padding: 16px 20px;
+                border-top: 1px solid #1e293b;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 12px;
+                color: #64748b;
+                white-space: nowrap;
+            }
+            .status-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                flex-shrink: 0;
+            }
+            .status-dot.green { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.4); }
+            .status-dot.yellow { background: #f59e0b; }
+            .status-dot.red { background: #ef4444; }
+
+            /* ===== 主区域 ===== */
+            .main-area {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                min-width: 0;
             }
 
-            /* 指标卡片网格 */
+            /* ===== 顶栏 ===== */
+            .topbar {
+                height: 56px;
+                min-height: 56px;
+                background: #ffffff;
+                border-bottom: 1px solid #e2e8f0;
+                display: flex;
+                align-items: center;
+                padding: 0 24px;
+                gap: 16px;
+            }
+            .topbar-breadcrumb {
+                font-size: 14px;
+                color: #94a3b8;
+                white-space: nowrap;
+            }
+            .topbar-breadcrumb strong {
+                color: #0f172a;
+                font-weight: 600;
+            }
+            .topbar-info {
+                flex: 1;
+                font-size: 12px;
+                color: #94a3b8;
+                text-align: center;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .topbar-right {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-left: auto;
+                white-space: nowrap;
+            }
+            .topbar-status {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 12px;
+                color: #10b981;
+                font-weight: 500;
+            }
+            .topbar-refresh {
+                font-size: 12px;
+                color: #94a3b8;
+            }
+            .topbar-logout {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 14px;
+                font-size: 13px;
+                color: #475569;
+                text-decoration: none;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                transition: all 0.15s ease;
+                font-family: inherit;
+                background: transparent;
+                cursor: pointer;
+            }
+            .topbar-logout:hover {
+                background: #f8fafc;
+                border-color: #cbd5e1;
+            }
+
+            /* ===== 内容区 ===== */
+            .content-area {
+                flex: 1;
+                overflow-y: auto;
+                padding: 24px;
+            }
+
+            /* ===== 时间范围按钮 ===== */
+            .time-range-bar {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 16px;
+            }
+            .time-range-btn {
+                padding: 6px 14px;
+                font-size: 13px;
+                font-weight: 500;
+                color: #475569;
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: all 0.15s ease;
+                font-family: inherit;
+                line-height: 1.4;
+            }
+            .time-range-btn:hover {
+                background: #f8fafc;
+                border-color: #cbd5e1;
+            }
+            .time-range-btn.active {
+                background: #0ea5e9;
+                color: #ffffff;
+                border-color: #0ea5e9;
+            }
+            .time-range-spacer { flex: 1; }
+
+            /* ===== 筛选器 ===== */
+            .filter-bar {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                padding: 14px 20px;
+                margin-bottom: 20px;
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                flex-wrap: wrap;
+            }
+            .filter-label {
+                font-size: 13px;
+                font-weight: 500;
+                color: #475569;
+            }
+
+            /* ===== 指标卡片 ===== */
             .metrics-grid {
                 display: grid;
                 grid-template-columns: repeat(5, 1fr);
                 gap: 16px;
-                margin-bottom: 24px;
+                margin-bottom: 20px;
             }
             .metric-card {
                 background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
                 padding: 20px;
+                transition: all 0.2s ease;
+            }
+            .metric-card:hover {
+                box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+                transform: translateY(-1px);
             }
             .metric-label {
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 500;
-                color: #6b7280;
+                color: #64748b;
                 margin-bottom: 8px;
+                text-transform: uppercase;
+                letter-spacing: 0.3px;
             }
             .metric-value {
-                font-size: 28px;
-                font-weight: 600;
-                color: #111827;
+                font-size: 26px;
+                font-weight: 700;
+                color: #0f172a;
                 letter-spacing: -0.5px;
             }
             .metric-subtitle {
                 font-size: 12px;
-                color: #9ca3af;
-                margin-top: 4px;
+                color: #94a3b8;
+                margin-top: 6px;
             }
-
-            /* 筛选器 */
-            .filter-bar {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px 20px;
-                margin-bottom: 24px;
-                display: flex;
+            .metric-trend {
+                display: inline-flex;
                 align-items: center;
-                gap: 16px;
+                gap: 2px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 2px 8px;
+                border-radius: 4px;
+                margin-left: 8px;
             }
-            .filter-label {
-                font-size: 14px;
-                font-weight: 500;
-                color: #374151;
+            .metric-trend.up {
+                color: #059669;
+                background: #ecfdf5;
+            }
+            .metric-trend.down {
+                color: #dc2626;
+                background: #fef2f2;
             }
 
-            /* 图表容器 */
+            /* ===== 图表容器 ===== */
             .chart-card {
                 background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
                 padding: 20px;
                 margin-bottom: 20px;
+                transition: box-shadow 0.2s ease;
+            }
+            .chart-card:hover {
+                box-shadow: 0 2px 8px rgba(0,0,0,0.04);
             }
             .chart-card h3 {
                 font-size: 14px;
                 font-weight: 600;
-                color: #111827;
+                color: #0f172a;
                 margin: 0 0 16px 0;
             }
 
@@ -372,21 +656,39 @@ INDEX_STRING = '''
 
             /* 下拉框样式 */
             .Select-control {
-                border-color: #e5e7eb !important;
+                border-color: #e2e8f0 !important;
                 border-radius: 6px !important;
             }
             .Select-control:hover {
-                border-color: #d1d5db !important;
+                border-color: #cbd5e1 !important;
             }
 
-            /* 响应式 */
-            @media (max-width: 1200px) {
+            /* ===== 响应式 ===== */
+            @media (max-width: 1100px) {
+                .sidebar {
+                    width: 60px;
+                    min-width: 60px;
+                }
+                .sidebar-logo-text,
+                .sidebar-section,
+                .sidebar-item span:last-child,
+                .sidebar-footer span:not(.status-dot) {
+                    display: none;
+                }
+                .sidebar-logo { padding: 20px 14px 24px; justify-content: center; }
+                .sidebar-item { padding: 10px 0; justify-content: center; border-left: none; border-right: 3px solid transparent; }
+                .sidebar-item.active { border-left-color: transparent; border-right-color: #38bdf8; }
+                .sidebar-footer { justify-content: center; padding: 16px 10px; }
                 .metrics-grid { grid-template-columns: repeat(3, 1fr); }
             }
             @media (max-width: 768px) {
+                .sidebar { display: none; }
                 .metrics-grid { grid-template-columns: repeat(2, 1fr); }
                 .chart-row { grid-template-columns: 1fr; }
-                body { padding: 16px; }
+                .content-area { padding: 16px; }
+                .topbar { padding: 0 16px; }
+                .time-range-bar { flex-wrap: wrap; }
+                .filter-bar { flex-direction: column; align-items: stretch; }
             }
         </style>
     </head>
@@ -413,15 +715,15 @@ LOGIN_PAGE = '''
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - CDN Analytics</title>
+    <title>登录 - CDN Panel</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -430,7 +732,7 @@ LOGIN_PAGE = '''
         .login-container {{
             background: #ffffff;
             border-radius: 12px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             padding: 40px;
             width: 100%;
             max-width: 400px;
@@ -440,52 +742,54 @@ LOGIN_PAGE = '''
             margin-bottom: 32px;
         }}
         .login-header h1 {{
-            font-size: 24px;
-            font-weight: 600;
-            color: #111827;
+            font-size: 22px;
+            font-weight: 700;
+            color: #0f172a;
             margin-bottom: 8px;
         }}
         .login-header p {{
             font-size: 14px;
-            color: #6b7280;
+            color: #64748b;
         }}
         .form-group {{
             margin-bottom: 20px;
         }}
         .form-group label {{
             display: block;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 500;
-            color: #374151;
+            color: #475569;
             margin-bottom: 8px;
         }}
         .form-group input {{
             width: 100%;
-            padding: 12px 16px;
+            padding: 10px 14px;
             font-size: 14px;
-            border: 1px solid #e5e7eb;
+            border: 1px solid #e2e8f0;
             border-radius: 8px;
             outline: none;
             transition: border-color 0.2s, box-shadow 0.2s;
+            font-family: inherit;
         }}
         .form-group input:focus {{
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            border-color: #0ea5e9;
+            box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
         }}
         .btn-login {{
             width: 100%;
-            padding: 12px;
+            padding: 11px;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             color: #ffffff;
-            background: #3b82f6;
+            background: #0ea5e9;
             border: none;
             border-radius: 8px;
             cursor: pointer;
             transition: background 0.2s;
+            font-family: inherit;
         }}
         .btn-login:hover {{
-            background: #2563eb;
+            background: #0284c7;
         }}
         .error-msg {{
             background: #fef2f2;
@@ -502,8 +806,8 @@ LOGIN_PAGE = '''
 <body>
     <div class="login-container">
         <div class="login-header">
-            <h1>CDN Analytics</h1>
-            <p>请输入凭据以访问仪表板</p>
+            <h1>CDN Panel</h1>
+            <p>请输入凭据以访问控制台</p>
         </div>
         <div class="error-msg">{error_message}</div>
         <form method="POST" action="/login">
@@ -521,6 +825,117 @@ LOGIN_PAGE = '''
 </body>
 </html>
 '''
+
+
+def create_sidebar(auth_config):
+    """创建侧边栏导航"""
+    def nav_item(icon, label, active=False):
+        cls = "sidebar-item active" if active else "sidebar-item"
+        return html.Div([
+            html.Span(icon, className="material-symbols-outlined"),
+            html.Span(label),
+        ], className=cls)
+
+    return html.Div([
+        # Logo
+        html.Div([
+            html.Span("CDN Panel", className="sidebar-logo-text"),
+        ], className="sidebar-logo"),
+
+        # 主要导航
+        html.Div("主要", className="sidebar-section"),
+        nav_item("dashboard", "概览"),
+        nav_item("analytics", "流量分析", active=True),
+        nav_item("language", "域名管理"),
+        nav_item("dns", "DNS 记录"),
+
+        # 配置
+        html.Div("配置", className="sidebar-section"),
+        nav_item("cached", "缓存"),
+        nav_item("shield", "安全防护"),
+        nav_item("lock", "SSL/TLS"),
+        nav_item("local_fire_department", "WAF 防火墙"),
+        nav_item("speed", "性能优化"),
+
+        # 网络
+        html.Div("网络", className="sidebar-section"),
+        nav_item("tune", "流量规则"),
+        nav_item("cloud_sync", "负载均衡"),
+        nav_item("monitoring", "实时监控"),
+
+        # 底部状态
+        html.Div([
+            html.Span(className="status-dot green"),
+            html.Span("系统运行正常"),
+        ], className="sidebar-footer"),
+    ], className="sidebar")
+
+
+def create_topbar(auth_config):
+    """创建顶部信息栏"""
+    right_items = [
+        html.Div([
+            html.Span(className="status-dot green"),
+            html.Span("健康"),
+        ], className="topbar-status"),
+        html.Span(id="refresh-status", className="topbar-refresh"),
+    ]
+    if auth_config["enabled"]:
+        right_items.append(
+            html.A("退出登录", href="/logout", className="topbar-logout")
+        )
+
+    return html.Div([
+        html.Span([
+            "CDN Panel / ",
+            html.Strong("流量分析"),
+        ], className="topbar-breadcrumb"),
+        html.Span(id="header-info", className="topbar-info"),
+        html.Div(right_items, className="topbar-right"),
+    ], className="topbar")
+
+
+def create_time_controls(default_start, default_end, domains):
+    """创建时间控制区域"""
+    return html.Div([
+        # 快捷时间按钮行
+        html.Div([
+            html.Button("最近 24 小时", id="range-24h", className="time-range-btn", n_clicks=0),
+            html.Button("最近 7 天", id="range-7d", className="time-range-btn", n_clicks=0),
+            html.Button("最近 30 天", id="range-30d", className="time-range-btn active", n_clicks=0),
+            html.Button("自定义范围", id="range-custom", className="time-range-btn", n_clicks=0),
+            html.Div(className="time-range-spacer"),
+            # 域名筛选
+            html.Span("域名", className="filter-label"),
+            dcc.Dropdown(
+                id="domain-filter",
+                options=[{"label": "全部域名", "value": "all"}] +
+                        [{"label": d, "value": d} for d in sorted(domains)],
+                value="all",
+                style={"width": "200px"},
+                clearable=False
+            ),
+        ], className="time-range-bar"),
+        # 自定义时间范围
+        html.Div([
+            html.Span("开始", className="filter-label"),
+            dcc.Input(
+                id="start-datetime",
+                type="datetime-local",
+                value=f"{default_start}T00:00:00",
+                style={"width": "200px", "padding": "6px 10px",
+                       "border": "1px solid #e2e8f0", "borderRadius": "6px", "fontSize": "13px"}
+            ),
+            html.Span("结束", className="filter-label"),
+            dcc.Input(
+                id="end-datetime",
+                type="datetime-local",
+                value=f"{default_end}T23:59:59",
+                style={"width": "200px", "padding": "6px 10px",
+                       "border": "1px solid #e2e8f0", "borderRadius": "6px", "fontSize": "13px"}
+            ),
+        ], className="filter-bar"),
+    ])
 
 
 def create_app(data_file=None):
@@ -545,7 +960,7 @@ def create_app(data_file=None):
         max_date = (datetime.now() + timedelta(days=30)).date()
 
     # 创建 Dash 应用
-    app = dash.Dash(__name__, title="CDN Analytics")
+    app = dash.Dash(__name__, title="CDN Panel")
     app.index_string = INDEX_STRING
 
     # 设置 Flask secret key 用于 session
@@ -565,7 +980,7 @@ def create_app(data_file=None):
 
         error_message = ""
         error_display = "none"
-        username = auth_config["username"]
+        username = ""
 
         if request.method == "POST":
             submitted_user = request.form.get("username", "")
@@ -608,157 +1023,113 @@ def create_app(data_file=None):
 
     # 布局
     app.layout = html.Div([
-        # 定时刷新组件
-        dcc.Interval(
-            id="refresh-interval",
-            interval=REFRESH_INTERVAL_MS,
-            n_intervals=0
-        ),
+        # 隐藏组件
+        dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
 
-        # 标题 (动态更新)
+        # 侧边栏
+        create_sidebar(auth_config),
+
+        # 主区域
         html.Div([
+            # 顶栏
+            create_topbar(auth_config),
+
+            # 内容区
             html.Div([
-                html.H1("CDN Analytics Dashboard"),
-                html.P(id="header-info")
-            ], style={"flex": "1"}),
-            # 退出按钮（仅在启用认证时显示）
-            html.A(
-                "退出登录",
-                href="/logout",
-                style={
-                    "display": "inline-block" if auth_config["enabled"] else "none",
-                    "padding": "8px 16px",
-                    "fontSize": "14px",
-                    "color": "#6b7280",
-                    "textDecoration": "none",
-                    "border": "1px solid #e5e7eb",
-                    "borderRadius": "6px",
-                    "transition": "all 0.2s",
-                }
-            ) if auth_config["enabled"] else None,
-        ], className="header", style={"display": "flex", "alignItems": "center"}),
+                # 时间控制
+                create_time_controls(default_start, default_end, domains),
 
-        # 汇总卡片容器 (动态更新)
-        html.Div(id="summary-cards"),
+                # 汇总卡片
+                html.Div(id="summary-cards"),
 
-        # 筛选器
-        html.Div([
-            # 开始时间输入框 (datetime-local 类型提供日期时间选择器)
-            html.Span("开始时间", className="filter-label"),
-            dcc.Input(
-                id="start-datetime",
-                type="datetime-local",
-                value=f"{default_start}T00:00:00",
-                style={"width": "200px", "marginRight": "24px", "padding": "6px 10px",
-                       "border": "1px solid #e5e7eb", "borderRadius": "6px", "fontSize": "14px"}
-            ),
-            # 结束时间输入框
-            html.Span("结束时间", className="filter-label"),
-            dcc.Input(
-                id="end-datetime",
-                type="datetime-local",
-                value=f"{default_end}T23:59:59",
-                style={"width": "200px", "marginRight": "24px", "padding": "6px 10px",
-                       "border": "1px solid #e5e7eb", "borderRadius": "6px", "fontSize": "14px"}
-            ),
-            # 域名筛选
-            html.Span("筛选域名", className="filter-label"),
-            dcc.Dropdown(
-                id="domain-filter",
-                options=[{"label": "全部域名", "value": "all"}] +
-                        [{"label": d, "value": d} for d in sorted(domains)],
-                value="all",
-                style={"width": "200px"},
-                clearable=False
-            ),
-            # 刷新状态提示
-            html.Span(id="refresh-status", style={"marginLeft": "auto", "fontSize": "12px", "color": "#9ca3af"}),
-        ], className="filter-bar"),
+                # 第一排: 请求带宽 + 请求流量
+                html.Div([
+                    html.Div([
+                        dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                    html.Div([
+                        dcc.Graph(id="flux-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                ], className="chart-row"),
 
-        # 第一排: 请求带宽 + 请求流量
-        html.Div([
-            html.Div([
-                dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-            html.Div([
-                dcc.Graph(id="flux-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-        ], className="chart-row"),
+                # 第二排: 请求数 + 命中率
+                html.Div([
+                    html.Div([
+                        dcc.Graph(id="requests-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                    html.Div([
+                        dcc.Graph(id="hitrate-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                ], className="chart-row"),
 
-        # 第二排: 请求数 + 命中率
-        html.Div([
-            html.Div([
-                dcc.Graph(id="requests-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-            html.Div([
-                dcc.Graph(id="hitrate-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-        ], className="chart-row"),
+                # HTTP 状态码
+                html.Div([
+                    html.Div([
+                        dcc.Graph(id="http-status-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                    html.Div([
+                        dcc.Graph(id="bs-http-status-chart", config={"displayModeBar": False})
+                    ], className="chart-card"),
+                ], className="chart-row"),
 
-        # HTTP 状态码
-        html.Div([
-            html.Div([
-                dcc.Graph(id="http-status-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-            html.Div([
-                dcc.Graph(id="bs-http-status-chart", config={"displayModeBar": False})
-            ], className="chart-card"),
-        ], className="chart-row"),
+                # 域名排行
+                html.Div([
+                    dcc.Graph(id="domain-ranking-chart", config={"displayModeBar": False})
+                ], className="chart-card"),
 
-        # 域名排行
-        html.Div([
-            dcc.Graph(id="domain-ranking-chart", config={"displayModeBar": False})
-        ], className="chart-card"),
+                # 回源分析
+                html.Div([
+                    dcc.Graph(id="origin-analysis-chart", config={"displayModeBar": False})
+                ], className="chart-card"),
 
-        # 回源分析
-        html.Div([
-            dcc.Graph(id="origin-analysis-chart", config={"displayModeBar": False})
-        ], className="chart-card"),
+                # 数据表格
+                html.Div([
+                    html.H3("详细数据"),
+                    dash_table.DataTable(
+                        id="data-table",
+                        columns=[
+                            {"name": "时间", "id": "timestamp"},
+                            {"name": "域名", "id": "domain"},
+                            {"name": "带宽 (Mbps)", "id": "bw_mbps", "type": "numeric", "format": {"specifier": ",.0f"}},
+                            {"name": "流量 (GB)", "id": "flux_gb", "type": "numeric", "format": {"specifier": ",.2f"}},
+                            {"name": "请求数", "id": "req_num", "type": "numeric", "format": {"specifier": ","}},
+                            {"name": "命中率 (%)", "id": "hit_rate", "type": "numeric", "format": {"specifier": ".1f"}},
+                            {"name": "回源数", "id": "bs_num", "type": "numeric", "format": {"specifier": ","}},
+                            {"name": "回源失败", "id": "bs_fail_num", "type": "numeric", "format": {"specifier": ","}},
+                        ],
+                        data=[],
+                        page_size=12,
+                        style_table={"overflowX": "auto"},
+                        style_cell={
+                            "textAlign": "left",
+                            "padding": "12px 16px",
+                            "fontFamily": "Inter, sans-serif",
+                            "fontSize": "13px",
+                            "border": "none",
+                            "borderBottom": "1px solid #f1f5f9",
+                        },
+                        style_header={
+                            "backgroundColor": "#f8fafc",
+                            "color": "#64748b",
+                            "fontWeight": "600",
+                            "fontSize": "12px",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.5px",
+                            "border": "none",
+                            "borderBottom": "2px solid #e2e8f0",
+                        },
+                        style_data_conditional=[
+                            {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"},
+                            {"if": {"state": "active"}, "backgroundColor": "#eff6ff", "border": "1px solid #bfdbfe"},
+                        ],
+                        sort_action="native",
+                        filter_action="native",
+                    )
+                ], className="chart-card"),
 
-        # 数据表格
-        html.Div([
-            html.H3("详细数据"),
-            dash_table.DataTable(
-                id="data-table",
-                columns=[
-                    {"name": "时间", "id": "timestamp"},
-                    {"name": "域名", "id": "domain"},
-                    {"name": "带宽 (Mbps)", "id": "bw_mbps", "type": "numeric", "format": {"specifier": ",.0f"}},
-                    {"name": "流量 (GB)", "id": "flux_gb", "type": "numeric", "format": {"specifier": ",.2f"}},
-                    {"name": "请求数", "id": "req_num", "type": "numeric", "format": {"specifier": ","}},
-                    {"name": "命中率 (%)", "id": "hit_rate", "type": "numeric", "format": {"specifier": ".1f"}},
-                    {"name": "回源数", "id": "bs_num", "type": "numeric", "format": {"specifier": ","}},
-                    {"name": "回源失败", "id": "bs_fail_num", "type": "numeric", "format": {"specifier": ","}},
-                ],
-                data=[],  # 数据由回调填充
-                page_size=12,
-                style_table={"overflowX": "auto"},
-                style_cell={
-                    "textAlign": "left",
-                    "padding": "12px 16px",
-                    "fontFamily": "Inter, sans-serif",
-                    "fontSize": "13px",
-                    "border": "none",
-                    "borderBottom": "1px solid #f3f4f6",
-                },
-                style_header={
-                    "backgroundColor": "#f9fafb",
-                    "color": "#6b7280",
-                    "fontWeight": "600",
-                    "fontSize": "12px",
-                    "textTransform": "uppercase",
-                    "letterSpacing": "0.5px",
-                    "border": "none",
-                    "borderBottom": "1px solid #e5e7eb",
-                },
-                style_data_conditional=[
-                    {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"}
-                ],
-                sort_action="native",
-                filter_action="native",
-            )
-        ], className="chart-card"),
-    ])
+            ], className="content-area"),
+        ], className="main-area"),
+    ], className="app-shell")
 
     # 注册回调 - 主数据更新
     @app.callback(
@@ -865,7 +1236,7 @@ def create_app(data_file=None):
             x=time_agg["timestamp"], y=time_agg["bw_mbps"],
             name="带宽", fill="tozeroy",
             line={"color": COLORS["primary"], "width": 2},
-            fillcolor="rgba(59, 130, 246, 0.1)"
+            fillcolor="rgba(14, 165, 233, 0.08)"
         ))
         bw_fig = apply_chart_style(bw_fig, "请求带宽")
         bw_fig.update_yaxes(title_text="带宽 (Mbps)", title_font={"size": 11})
@@ -1002,6 +1373,49 @@ def create_app(data_file=None):
             table_data.to_dict("records")
         )
 
+    # 快捷时间范围按钮回调
+    @app.callback(
+        [
+            Output("start-datetime", "value"),
+            Output("end-datetime", "value"),
+            Output("range-24h", "className"),
+            Output("range-7d", "className"),
+            Output("range-30d", "className"),
+            Output("range-custom", "className"),
+        ],
+        [
+            Input("range-24h", "n_clicks"),
+            Input("range-7d", "n_clicks"),
+            Input("range-30d", "n_clicks"),
+            Input("range-custom", "n_clicks"),
+        ],
+        prevent_initial_call=True
+    )
+    def update_time_range(n_24h, n_7d, n_30d, n_custom):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return dash.no_update, dash.no_update, "time-range-btn", "time-range-btn", "time-range-btn active", "time-range-btn"
+        btn_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        base = "time-range-btn"
+        classes = [base, base, base, base]
+        btn_map = {"range-24h": 0, "range-7d": 1, "range-30d": 2, "range-custom": 3}
+        classes[btn_map[btn_id]] = base + " active"
+
+        now = datetime.now()
+        end_val = now.strftime("%Y-%m-%dT%H:%M:%S")
+
+        if btn_id == "range-24h":
+            start_val = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        elif btn_id == "range-7d":
+            start_val = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+        elif btn_id == "range-30d":
+            start_val = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        else:  # custom
+            return dash.no_update, dash.no_update, *classes
+
+        return start_val, end_val, *classes
+
     return app
 
 
@@ -1018,7 +1432,7 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
     auth_config = get_auth_config()
 
     print("\n" + "=" * 60)
-    print("  CDN Analytics Dashboard")
+    print("  CDN Panel Dashboard")
     print("=" * 60)
     print(f"  数据存储: SQLite")
     print(f"  记录数量: {record_count:,} 条")
@@ -1029,7 +1443,7 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
     print("-" * 60)
     if auth_config["enabled"]:
         print(f"  登录认证: 已启用")
-        print(f"  用户名: {auth_config['username']}")
+        print(f"  用户列表: {', '.join(auth_config['users'].keys())}")
     else:
         print(f"  登录认证: 未启用 (设置 DASHBOARD_PASSWORD 环境变量启用)")
     print("=" * 60)
