@@ -144,49 +144,46 @@ def load_data_from_sqlite(
 
 
 def process_data(records):
-    """处理数据为 DataFrame"""
+    """处理数据为 DataFrame (向量化实现)"""
     if not records:
         return pd.DataFrame()
 
-    data = []
-    for i, record in enumerate(records):
-        # 从 start_time 转换时间戳
-        start_time_ms = record["start_time"]
-        timestamp = datetime.fromtimestamp(start_time_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
-        # 使用 start_time 作为 batch 标识（同一时间点的记录归为一批）
-        batch = start_time_ms
+    df = pd.DataFrame(records)
 
-        # 获取时间间隔，用于将 bit 总量转换为 bps
-        interval = record.get("interval", 300)
+    # 缺失列填 0 并数值化
+    numeric_cols = [
+        "start_time", "interval", "bw", "flux", "bs_bw", "bs_flux",
+        "req_num", "hit_num", "bs_num", "bs_fail_num", "hit_flux",
+        "http_code_2xx", "http_code_3xx", "http_code_4xx", "http_code_5xx",
+        "bs_http_code_2xx", "bs_http_code_3xx", "bs_http_code_4xx", "bs_http_code_5xx",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0
 
-        row = {
-            "timestamp": timestamp,
-            "batch": batch,
-            "domain": record["domain"],
-            "bw_mbps": (record["bw"] or 0) / interval / 1000000,  # bit 总量 / interval = bps -> Mbps
-            "flux_gb": (record["flux"] or 0) / (1024**3),
-            "bs_bw_mbps": (record["bs_bw"] or 0) / interval / 1000000,  # bit 总量 / interval = bps -> Mbps
-            "bs_flux_gb": (record["bs_flux"] or 0) / (1024**3),
-            "req_num": record["req_num"] or 0,
-            "hit_num": record["hit_num"] or 0,
-            "bs_num": record["bs_num"] or 0,
-            "bs_fail_num": record["bs_fail_num"] or 0,
-            "hit_flux_gb": (record["hit_flux"] or 0) / (1024**3),
-            "http_2xx": record["http_code_2xx"] or 0,
-            "http_3xx": record["http_code_3xx"] or 0,
-            "http_4xx": record["http_code_4xx"] or 0,
-            "http_5xx": record["http_code_5xx"] or 0,
-            "bs_http_2xx": record["bs_http_code_2xx"] or 0,
-            "bs_http_3xx": record["bs_http_code_3xx"] or 0,
-            "bs_http_4xx": record["bs_http_code_4xx"] or 0,
-            "bs_http_5xx": record["bs_http_code_5xx"] or 0,
-        }
-        row["hit_rate"] = (row["hit_num"] / row["req_num"] * 100) if row["req_num"] > 0 else 0
-        row["bs_fail_rate"] = (row["bs_fail_num"] / row["bs_num"] * 100) if row["bs_num"] > 0 else 0
-        data.append(row)
+    interval = df["interval"].replace(0, 300)
+    df["timestamp"] = pd.to_datetime(df["start_time"], unit="ms")
+    df["batch"] = df["start_time"]
+    df["bw_mbps"] = df["bw"] / interval / 1_000_000
+    df["flux_gb"] = df["flux"] / (1024 ** 3)
+    df["bs_bw_mbps"] = df["bs_bw"] / interval / 1_000_000
+    df["bs_flux_gb"] = df["bs_flux"] / (1024 ** 3)
+    df["hit_flux_gb"] = df["hit_flux"] / (1024 ** 3)
+    df["http_2xx"] = df["http_code_2xx"]
+    df["http_3xx"] = df["http_code_3xx"]
+    df["http_4xx"] = df["http_code_4xx"]
+    df["http_5xx"] = df["http_code_5xx"]
+    df["bs_http_2xx"] = df["bs_http_code_2xx"]
+    df["bs_http_3xx"] = df["bs_http_code_3xx"]
+    df["bs_http_4xx"] = df["bs_http_code_4xx"]
+    df["bs_http_5xx"] = df["bs_http_code_5xx"]
 
-    df = pd.DataFrame(data)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # 命中率与回源失败率，按位向量化，避免除零
+    df["hit_rate"] = (df["hit_num"] / df["req_num"].where(df["req_num"] > 0) * 100).fillna(0)
+    df["bs_fail_rate"] = (df["bs_fail_num"] / df["bs_num"].where(df["bs_num"] > 0) * 100).fillna(0)
+
     return df
 
 
@@ -912,7 +909,7 @@ INDEX_STRING = '''
 
 
 # 刷新间隔（毫秒）
-REFRESH_INTERVAL_MS = 30 * 1000  # 30秒
+REFRESH_INTERVAL_MS = 60 * 1000  # 60秒
 
 
 # 登录页面 HTML (注意: CSS 花括号需要转义为 {{ }})
@@ -2237,9 +2234,12 @@ def create_app(data_file=None):
         origin_fig.update_yaxes(title_text="回源带宽 (Mbps)", secondary_y=False, title_font={"size": 11})
         origin_fig.update_yaxes(title_text="失败数", secondary_y=True, title_font={"size": 11})
 
-        # 表格数据
-        table_data = filtered_df.copy()
-        table_data["timestamp"] = pd.to_datetime(table_data["timestamp"]).dt.strftime("%H:%M:%S")
+        # 表格数据：只保留最近 500 条，按时间倒序，避免传输 30w 行到前端
+        TABLE_MAX_ROWS = 500
+        keep_cols = ["timestamp", "domain", "bw_mbps", "flux_gb",
+                     "req_num", "hit_rate", "bs_num", "bs_fail_num"]
+        table_df = filtered_df[keep_cols].sort_values("timestamp", ascending=False).head(TABLE_MAX_ROWS).copy()
+        table_df["timestamp"] = table_df["timestamp"].dt.strftime("%m-%d %H:%M:%S")
 
         return (
             header_info,
@@ -2248,7 +2248,7 @@ def create_app(data_file=None):
             bw_fig, flux_fig, req_fig, hitrate_fig,
             http_fig, bs_http_fig,
             domain_fig, origin_fig,
-            table_data.to_dict("records")
+            table_df.to_dict("records")
         )
 
     # 快捷时间范围按钮回调
