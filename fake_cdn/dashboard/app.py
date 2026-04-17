@@ -888,6 +888,9 @@ INDEX_STRING = '''
                 cursor: pointer;
             }
 
+            /* 路由容器：让内部 sidebar 能撑满高度 */
+            #sidebar-container { display: flex; flex-shrink: 0; }
+
             /* 代码/URL 样式 */
             .mono {
                 font-family: 'SF Mono', Monaco, Consolas, monospace;
