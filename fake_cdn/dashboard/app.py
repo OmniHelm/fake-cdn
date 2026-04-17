@@ -690,6 +690,210 @@ INDEX_STRING = '''
                 .time-range-bar { flex-wrap: wrap; }
                 .filter-bar { flex-direction: column; align-items: stretch; }
             }
+
+            /* ===== 页面通用 ===== */
+            .page-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 20px;
+            }
+            .page-header h2 {
+                font-size: 22px;
+                font-weight: 700;
+                margin: 0 0 4px 0;
+                color: #0f172a;
+            }
+            .page-header p {
+                font-size: 13px;
+                color: #64748b;
+                margin: 0;
+            }
+
+            .status-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 2px 10px;
+                font-size: 12px;
+                font-weight: 500;
+                border-radius: 4px;
+            }
+            .status-badge.active { color: #059669; background: #ecfdf5; }
+            .status-badge.pending { color: #d97706; background: #fef3c7; }
+            .status-badge.warning { color: #dc2626; background: #fef2f2; }
+            .status-badge.info { color: #0369a1; background: #e0f2fe; }
+
+            .btn-primary {
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 500;
+                color: #fff;
+                background: #0ea5e9;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                font-family: inherit;
+            }
+            .btn-primary:hover { background: #0284c7; }
+
+            .btn-ghost {
+                padding: 6px 12px;
+                font-size: 13px;
+                color: #475569;
+                background: #fff;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                cursor: pointer;
+                font-family: inherit;
+            }
+            .btn-ghost:hover { background: #f8fafc; }
+
+            /* 切换开关 */
+            .toggle-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 14px 0;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            .toggle-row:last-child { border-bottom: none; }
+            .toggle-info .toggle-title {
+                font-size: 14px;
+                font-weight: 500;
+                color: #0f172a;
+            }
+            .toggle-info .toggle-desc {
+                font-size: 12px;
+                color: #64748b;
+                margin-top: 2px;
+            }
+            .toggle-switch {
+                width: 36px;
+                height: 20px;
+                background: #cbd5e1;
+                border-radius: 10px;
+                position: relative;
+                flex-shrink: 0;
+            }
+            .toggle-switch.on { background: #0ea5e9; }
+            .toggle-switch::after {
+                content: '';
+                width: 16px;
+                height: 16px;
+                background: #fff;
+                border-radius: 50%;
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                transition: left 0.2s;
+            }
+            .toggle-switch.on::after { left: 18px; }
+
+            /* 日志流 */
+            .log-stream {
+                font-family: 'SF Mono', Monaco, Consolas, monospace;
+                font-size: 12px;
+                max-height: 480px;
+                overflow-y: auto;
+            }
+            .log-line {
+                padding: 6px 0;
+                border-bottom: 1px solid #f8fafc;
+                color: #475569;
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            }
+            .log-time { color: #94a3b8; min-width: 70px; }
+            .log-ip { color: #334155; min-width: 120px; }
+            .log-method { color: #0369a1; font-weight: 600; min-width: 50px; }
+            .log-path { color: #475569; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .log-status-2xx { color: #059669; font-weight: 600; min-width: 40px; }
+            .log-status-3xx { color: #0369a1; font-weight: 600; min-width: 40px; }
+            .log-status-4xx { color: #d97706; font-weight: 600; min-width: 40px; }
+            .log-status-5xx { color: #dc2626; font-weight: 600; min-width: 40px; }
+            .log-latency { color: #94a3b8; min-width: 60px; text-align: right; }
+
+            /* 节点网格 */
+            .node-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+            }
+            .node-card {
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 14px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+            .node-region {
+                font-size: 14px;
+                font-weight: 600;
+                color: #0f172a;
+            }
+            .node-meta {
+                font-size: 12px;
+                color: #64748b;
+                margin-top: 2px;
+            }
+
+            /* 时间线 */
+            .timeline-item {
+                display: flex;
+                gap: 12px;
+                padding: 10px 0;
+                border-bottom: 1px solid #f1f5f9;
+                font-size: 13px;
+                align-items: flex-start;
+            }
+            .timeline-item:last-child { border-bottom: none; }
+            .timeline-time {
+                color: #94a3b8;
+                min-width: 90px;
+                font-size: 12px;
+            }
+            .timeline-icon {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                margin-top: 7px;
+                flex-shrink: 0;
+            }
+            .timeline-icon.info { background: #0ea5e9; }
+            .timeline-icon.success { background: #10b981; }
+            .timeline-icon.warning { background: #f59e0b; }
+            .timeline-desc { color: #334155; }
+
+            /* QPS 大数字 */
+            .qps-number {
+                font-size: 56px;
+                font-weight: 700;
+                color: #0ea5e9;
+                letter-spacing: -2px;
+                font-variant-numeric: tabular-nums;
+                line-height: 1;
+            }
+            .qps-label {
+                font-size: 13px;
+                color: #64748b;
+                margin-top: 6px;
+            }
+
+            /* 侧边栏链接 */
+            a.sidebar-item {
+                text-decoration: none;
+                cursor: pointer;
+            }
+
+            /* 代码/URL 样式 */
+            .mono {
+                font-family: 'SF Mono', Monaco, Consolas, monospace;
+                font-size: 12px;
+                color: #334155;
+            }
         </style>
     </head>
     <body>
@@ -827,14 +1031,37 @@ LOGIN_PAGE = '''
 '''
 
 
-def create_sidebar(auth_config):
-    """创建侧边栏导航"""
-    def nav_item(icon, label, active=False):
+# 路由路径 → 菜单标题
+PAGE_TITLES = {
+    "/": "概览",
+    "/overview": "概览",
+    "/analytics": "流量分析",
+    "/domains": "域名管理",
+    "/dns": "DNS 记录",
+    "/cache": "缓存",
+    "/security": "安全防护",
+    "/ssl": "SSL/TLS",
+    "/waf": "WAF 防火墙",
+    "/speed": "性能优化",
+    "/rules": "流量规则",
+    "/loadbalancer": "负载均衡",
+    "/monitor": "实时监控",
+}
+
+
+def create_sidebar(current_path="/overview"):
+    """创建侧边栏导航，current_path 决定 active 项"""
+    # 归一化 /
+    if current_path in ("/", ""):
+        current_path = "/overview"
+
+    def nav_item(icon, label, href):
+        active = (current_path == href)
         cls = "sidebar-item active" if active else "sidebar-item"
-        return html.Div([
+        return dcc.Link([
             html.Span(icon, className="material-symbols-outlined"),
             html.Span(label),
-        ], className=cls)
+        ], href=href, className=cls, refresh=False)
 
     return html.Div([
         # Logo
@@ -844,24 +1071,24 @@ def create_sidebar(auth_config):
 
         # 主要导航
         html.Div("主要", className="sidebar-section"),
-        nav_item("dashboard", "概览"),
-        nav_item("analytics", "流量分析", active=True),
-        nav_item("language", "域名管理"),
-        nav_item("dns", "DNS 记录"),
+        nav_item("dashboard", "概览", "/overview"),
+        nav_item("analytics", "流量分析", "/analytics"),
+        nav_item("language", "域名管理", "/domains"),
+        nav_item("dns", "DNS 记录", "/dns"),
 
         # 配置
         html.Div("配置", className="sidebar-section"),
-        nav_item("cached", "缓存"),
-        nav_item("shield", "安全防护"),
-        nav_item("lock", "SSL/TLS"),
-        nav_item("local_fire_department", "WAF 防火墙"),
-        nav_item("speed", "性能优化"),
+        nav_item("cached", "缓存", "/cache"),
+        nav_item("shield", "安全防护", "/security"),
+        nav_item("lock", "SSL/TLS", "/ssl"),
+        nav_item("local_fire_department", "WAF 防火墙", "/waf"),
+        nav_item("speed", "性能优化", "/speed"),
 
         # 网络
         html.Div("网络", className="sidebar-section"),
-        nav_item("tune", "流量规则"),
-        nav_item("cloud_sync", "负载均衡"),
-        nav_item("monitoring", "实时监控"),
+        nav_item("tune", "流量规则", "/rules"),
+        nav_item("cloud_sync", "负载均衡", "/loadbalancer"),
+        nav_item("monitoring", "实时监控", "/monitor"),
 
         # 底部状态
         html.Div([
@@ -871,8 +1098,10 @@ def create_sidebar(auth_config):
     ], className="sidebar")
 
 
-def create_topbar(auth_config):
+def create_topbar(auth_config, current_path="/overview"):
     """创建顶部信息栏"""
+    page_title = PAGE_TITLES.get(current_path, "概览")
+
     right_items = [
         html.Div([
             html.Span(className="status-dot green"),
@@ -888,11 +1117,42 @@ def create_topbar(auth_config):
     return html.Div([
         html.Span([
             "CDN Panel / ",
-            html.Strong("流量分析"),
+            html.Strong(page_title, id="breadcrumb-page"),
         ], className="topbar-breadcrumb"),
         html.Span(id="header-info", className="topbar-info"),
         html.Div(right_items, className="topbar-right"),
     ], className="topbar")
+
+
+# ============================================================================
+# 通用 UI 辅助
+# ============================================================================
+def create_page_header(title, description, action_label=None):
+    """统一页面标题区"""
+    right = html.Button(action_label, className="btn-primary") if action_label else None
+    return html.Div([
+        html.Div([
+            html.H2(title),
+            html.P(description),
+        ]),
+        right,
+    ], className="page-header")
+
+
+def create_status_badge(text, variant="active"):
+    """状态徽章"""
+    return html.Span(text, className=f"status-badge {variant}")
+
+
+def create_toggle_row(title, desc, on=True):
+    """切换开关行（纯展示）"""
+    return html.Div([
+        html.Div([
+            html.Div(title, className="toggle-title"),
+            html.Div(desc, className="toggle-desc"),
+        ], className="toggle-info"),
+        html.Div(className=f"toggle-switch {'on' if on else ''}"),
+    ], className="toggle-row")
 
 
 def create_time_controls(default_start, default_end, domains):
@@ -938,6 +1198,696 @@ def create_time_controls(default_start, default_end, domains):
     ])
 
 
+# ============================================================================
+# 表格通用样式
+# ============================================================================
+TABLE_STYLE_CELL = {
+    "textAlign": "left",
+    "padding": "12px 16px",
+    "fontFamily": "Inter, sans-serif",
+    "fontSize": "13px",
+    "border": "none",
+    "borderBottom": "1px solid #f1f5f9",
+}
+TABLE_STYLE_HEADER = {
+    "backgroundColor": "#f8fafc",
+    "color": "#64748b",
+    "fontWeight": "600",
+    "fontSize": "12px",
+    "textTransform": "uppercase",
+    "letterSpacing": "0.5px",
+    "border": "none",
+    "borderBottom": "2px solid #e2e8f0",
+    "padding": "10px 16px",
+}
+
+
+def _simple_table(columns, data, page_size=15):
+    """构造统一样式的简单表格"""
+    return dash_table.DataTable(
+        columns=columns,
+        data=data,
+        page_size=page_size,
+        style_table={"overflowX": "auto"},
+        style_cell=TABLE_STYLE_CELL,
+        style_header=TABLE_STYLE_HEADER,
+        style_data_conditional=[
+            {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"},
+        ],
+        sort_action="native",
+    )
+
+
+# ============================================================================
+# 页面: 概览
+# ============================================================================
+def create_overview_page(storage):
+    """概览页"""
+    # 从 storage 取真实概览数据（如果可用）
+    try:
+        records = storage.query_logs()
+        df = process_data(records) if records else pd.DataFrame()
+    except Exception:
+        df = pd.DataFrame()
+
+    if not df.empty:
+        time_agg = df.groupby("batch").agg({"bw_mbps": "sum"})
+        peak_gbps = time_agg["bw_mbps"].max() / 1000
+        total_tb = df["flux_gb"].sum() / 1024
+        total_req_m = df["req_num"].sum() / 1_000_000
+        active_domains = df["domain"].nunique()
+    else:
+        peak_gbps, total_tb, total_req_m, active_domains = 0, 0, 0, 0
+
+    cards = html.Div([
+        create_metric_card("峰值带宽", f"{peak_gbps:.1f} Gbps", "全局峰值"),
+        create_metric_card("总流量", f"{total_tb:,.2f} TB", "累计传输"),
+        create_metric_card("总请求", f"{total_req_m:,.1f} M", "累计请求数"),
+        create_metric_card("活跃域名", f"{active_domains}", "已接入域名"),
+        create_metric_card("可用率", "99.98%", "最近 30 天", COLORS["success"]),
+    ], className="metrics-grid")
+
+    nodes = [
+        ("华东 · 上海", "12 节点 · 正常", "green"),
+        ("华北 · 北京", "10 节点 · 正常", "green"),
+        ("华南 · 广州", "8 节点 · 正常", "green"),
+        ("新加坡", "4 节点 · 正常", "green"),
+        ("东京", "3 节点 · 正常", "green"),
+        ("法兰克福", "2 节点 · 维护中", "yellow"),
+    ]
+    node_cards = html.Div([
+        html.Div([
+            html.Span(className=f"status-dot {color}"),
+            html.Div([
+                html.Div(region, className="node-region"),
+                html.Div(meta, className="node-meta"),
+            ]),
+        ], className="node-card")
+        for region, meta, color in nodes
+    ], className="node-grid")
+
+    activities = [
+        ("2 分钟前", "info", "新域名 api.example.com 接入成功"),
+        ("15 分钟前", "success", "SSL 证书自动续期完成 (appcircle.io)"),
+        ("1 小时前", "warning", "WAF 拦截 127 次可疑请求 (SQL 注入)"),
+        ("3 小时前", "info", "缓存规则更新: *.js 文件 TTL 调整为 7 天"),
+        ("6 小时前", "success", "法兰克福节点维护结束，服务恢复"),
+        ("昨天", "info", "月度流量报告已生成"),
+        ("昨天", "warning", "突发流量峰值 18.8 Gbps 触发告警"),
+        ("2 天前", "success", "全球 39 个节点健康检查通过"),
+    ]
+    timeline = html.Div([
+        html.Div([
+            html.Span(t, className="timeline-time"),
+            html.Span(className=f"timeline-icon {var}"),
+            html.Span(desc, className="timeline-desc"),
+        ], className="timeline-item")
+        for t, var, desc in activities
+    ])
+
+    return html.Div([
+        create_page_header("概览", "CDN 全局运行状态与关键指标"),
+        cards,
+        html.Div([
+            html.Div([
+                html.H3("全球节点状态"),
+                node_cards,
+            ], className="chart-card"),
+            html.Div([
+                html.H3("最近活动"),
+                timeline,
+            ], className="chart-card"),
+        ], className="chart-row"),
+    ])
+
+
+# ============================================================================
+# 页面: 流量分析（现有功能）
+# ============================================================================
+def create_analytics_page(default_start, default_end, domains):
+    """流量分析页（保留现有功能）"""
+    return html.Div([
+        create_page_header("流量分析", "带宽、请求、缓存与回源详细指标"),
+        create_time_controls(default_start, default_end, domains),
+        html.Div(id="summary-cards"),
+        html.Div([
+            html.Div([dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})], className="chart-card"),
+            html.Div([dcc.Graph(id="flux-chart", config={"displayModeBar": False})], className="chart-card"),
+        ], className="chart-row"),
+        html.Div([
+            html.Div([dcc.Graph(id="requests-chart", config={"displayModeBar": False})], className="chart-card"),
+            html.Div([dcc.Graph(id="hitrate-chart", config={"displayModeBar": False})], className="chart-card"),
+        ], className="chart-row"),
+        html.Div([
+            html.Div([dcc.Graph(id="http-status-chart", config={"displayModeBar": False})], className="chart-card"),
+            html.Div([dcc.Graph(id="bs-http-status-chart", config={"displayModeBar": False})], className="chart-card"),
+        ], className="chart-row"),
+        html.Div([
+            dcc.Graph(id="domain-ranking-chart", config={"displayModeBar": False})
+        ], className="chart-card"),
+        html.Div([
+            dcc.Graph(id="origin-analysis-chart", config={"displayModeBar": False})
+        ], className="chart-card"),
+        html.Div([
+            html.H3("详细数据"),
+            dash_table.DataTable(
+                id="data-table",
+                columns=[
+                    {"name": "时间", "id": "timestamp"},
+                    {"name": "域名", "id": "domain"},
+                    {"name": "带宽 (Mbps)", "id": "bw_mbps", "type": "numeric", "format": {"specifier": ",.0f"}},
+                    {"name": "流量 (GB)", "id": "flux_gb", "type": "numeric", "format": {"specifier": ",.2f"}},
+                    {"name": "请求数", "id": "req_num", "type": "numeric", "format": {"specifier": ","}},
+                    {"name": "命中率 (%)", "id": "hit_rate", "type": "numeric", "format": {"specifier": ".1f"}},
+                    {"name": "回源数", "id": "bs_num", "type": "numeric", "format": {"specifier": ","}},
+                    {"name": "回源失败", "id": "bs_fail_num", "type": "numeric", "format": {"specifier": ","}},
+                ],
+                data=[],
+                page_size=12,
+                style_table={"overflowX": "auto"},
+                style_cell=TABLE_STYLE_CELL,
+                style_header=TABLE_STYLE_HEADER,
+                style_data_conditional=[
+                    {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"},
+                    {"if": {"state": "active"}, "backgroundColor": "#eff6ff", "border": "1px solid #bfdbfe"},
+                ],
+                sort_action="native",
+                filter_action="native",
+            )
+        ], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 域名管理
+# ============================================================================
+def create_domains_page(domains):
+    """域名管理页"""
+    import random
+    random.seed(42)
+
+    cache_modes = ["标准", "激进缓存", "兼容模式"]
+    statuses = [("已激活", "active")] * 8 + [("待验证", "pending"), ("告警", "warning")]
+    rows = []
+    domain_list = sorted(domains) if domains else [f"example{i}.com" for i in range(20)]
+    for i, d in enumerate(domain_list):
+        st_text, st_var = random.choice(statuses)
+        origin_ip = f"{random.randint(10, 200)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+        created = f"2025-{random.randint(1,12):02d}-{random.randint(1,28):02d}"
+        rows.append({
+            "domain": d,
+            "status": st_text,
+            "ssl": "已启用" if st_text == "已激活" else "配置中",
+            "origin": origin_ip,
+            "cache": random.choice(cache_modes),
+            "created": created,
+        })
+
+    table = _simple_table(
+        columns=[
+            {"name": "域名", "id": "domain"},
+            {"name": "状态", "id": "status"},
+            {"name": "SSL", "id": "ssl"},
+            {"name": "源站 IP", "id": "origin"},
+            {"name": "缓存模式", "id": "cache"},
+            {"name": "创建时间", "id": "created"},
+        ],
+        data=rows,
+        page_size=20,
+    )
+
+    return html.Div([
+        create_page_header(
+            "域名管理",
+            f"管理已接入的 {len(domain_list)} 个域名",
+            action_label="+ 添加域名",
+        ),
+        html.Div([table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: DNS 记录
+# ============================================================================
+def create_dns_page(domains):
+    """DNS 记录页"""
+    import random
+    random.seed(7)
+    record_types = ["A", "A", "A", "CNAME", "CNAME", "AAAA", "MX", "TXT", "NS"]
+    rows = []
+    base_domain = sorted(domains)[0] if domains else "example.com"
+    # 主域名的典型 DNS 记录
+    rows.extend([
+        {"type": "A", "name": "@", "value": "47.243.87.148", "ttl": "自动", "proxy": "已代理"},
+        {"type": "A", "name": "www", "value": "47.243.87.148", "ttl": "自动", "proxy": "已代理"},
+        {"type": "AAAA", "name": "@", "value": "2400:3200::1", "ttl": "自动", "proxy": "已代理"},
+        {"type": "CNAME", "name": "cdn", "value": f"{base_domain}.cdn.fakecdn.net", "ttl": "自动", "proxy": "已代理"},
+        {"type": "CNAME", "name": "api", "value": f"api-origin.{base_domain}", "ttl": "300", "proxy": "仅 DNS"},
+        {"type": "CNAME", "name": "mail", "value": f"mail.{base_domain}", "ttl": "3600", "proxy": "仅 DNS"},
+        {"type": "MX", "name": "@", "value": f"10 mail.{base_domain}", "ttl": "3600", "proxy": "仅 DNS"},
+        {"type": "TXT", "name": "@", "value": "v=spf1 include:_spf.google.com ~all", "ttl": "3600", "proxy": "仅 DNS"},
+        {"type": "TXT", "name": "_dmarc", "value": "v=DMARC1; p=reject; rua=mailto:dmarc@...", "ttl": "3600", "proxy": "仅 DNS"},
+        {"type": "NS", "name": "@", "value": "ns1.fakecdn.net", "ttl": "86400", "proxy": "仅 DNS"},
+        {"type": "NS", "name": "@", "value": "ns2.fakecdn.net", "ttl": "86400", "proxy": "仅 DNS"},
+    ])
+    # 为其他几个域名加简单记录
+    for d in sorted(domains)[1:8] if domains else []:
+        rows.append({"type": "A", "name": d, "value": f"203.0.113.{random.randint(1, 250)}", "ttl": "自动", "proxy": "已代理"})
+
+    table = _simple_table(
+        columns=[
+            {"name": "类型", "id": "type"},
+            {"name": "名称", "id": "name"},
+            {"name": "值", "id": "value"},
+            {"name": "TTL", "id": "ttl"},
+            {"name": "代理状态", "id": "proxy"},
+        ],
+        data=rows,
+        page_size=15,
+    )
+
+    return html.Div([
+        create_page_header("DNS 记录", "管理域名的 DNS 解析记录", action_label="+ 添加记录"),
+        html.Div([table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 缓存
+# ============================================================================
+def create_cache_page():
+    """缓存页"""
+    cards = html.Div([
+        create_metric_card("缓存命中率", "92.8%", "最近 24 小时", COLORS["success"]),
+        create_metric_card("缓存对象数", "8.4 M", "当前活跃对象"),
+        create_metric_card("节省源站流量", "1.78 TB", "最近 7 天"),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(3, 1fr)"})
+
+    purge_card = html.Div([
+        html.H3("URL 刷新"),
+        html.P("输入 URL 立即清除 CDN 节点缓存，支持通配符 *", style={"fontSize": "13px", "color": "#64748b", "margin": "0 0 12px"}),
+        html.Div([
+            dcc.Input(
+                type="text",
+                placeholder="https://example.com/path/*",
+                style={"flex": "1", "padding": "8px 12px", "border": "1px solid #e2e8f0",
+                       "borderRadius": "6px", "fontSize": "13px", "fontFamily": "inherit"},
+            ),
+            html.Button("提交刷新", className="btn-primary"),
+        ], style={"display": "flex", "gap": "8px"}),
+    ], className="chart-card")
+
+    rules = [
+        {"pattern": "*.css", "action": "缓存 30 天", "edge_ttl": "30d", "browser_ttl": "4h"},
+        {"pattern": "*.js", "action": "缓存 7 天", "edge_ttl": "7d", "browser_ttl": "4h"},
+        {"pattern": "*.jpg|*.png|*.webp", "action": "缓存 30 天", "edge_ttl": "30d", "browser_ttl": "1d"},
+        {"pattern": "/api/*", "action": "不缓存", "edge_ttl": "-", "browser_ttl": "-"},
+        {"pattern": "/admin/*", "action": "绕过缓存", "edge_ttl": "-", "browser_ttl": "no-cache"},
+    ]
+    rules_table = _simple_table(
+        columns=[
+            {"name": "匹配模式", "id": "pattern"},
+            {"name": "动作", "id": "action"},
+            {"name": "边缘 TTL", "id": "edge_ttl"},
+            {"name": "浏览器 TTL", "id": "browser_ttl"},
+        ],
+        data=rules,
+        page_size=10,
+    )
+
+    prefetch = [
+        {"url": "https://appcircle.io/static/bundle.js", "status": "已完成", "progress": "100%", "time": "12:30"},
+        {"url": "https://tigerbeetle.com/images/logo.png", "status": "进行中", "progress": "64%", "time": "12:35"},
+        {"url": "https://qdrant.tech/*.css", "status": "排队中", "progress": "0%", "time": "12:40"},
+    ]
+    prefetch_table = _simple_table(
+        columns=[
+            {"name": "URL", "id": "url"},
+            {"name": "状态", "id": "status"},
+            {"name": "进度", "id": "progress"},
+            {"name": "时间", "id": "time"},
+        ],
+        data=prefetch,
+        page_size=10,
+    )
+
+    return html.Div([
+        create_page_header("缓存", "缓存命中率、刷新与规则配置"),
+        cards,
+        purge_card,
+        html.Div([html.H3("缓存规则"), rules_table], className="chart-card"),
+        html.Div([html.H3("预取任务"), prefetch_table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 安全防护
+# ============================================================================
+def create_security_page():
+    """安全防护页"""
+    cards = html.Div([
+        create_metric_card("24h 已拦截", "12,847", "恶意请求", COLORS["danger"]),
+        create_metric_card("可疑请求", "3,291", "标记为可疑"),
+        create_metric_card("黑名单 IP", "178", "当前生效"),
+        create_metric_card("威胁分数", "中", "整体评估", COLORS["warning"]),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(4, 1fr)"})
+
+    events = [
+        {"time": "12:45:23", "ip": "203.0.113.42", "type": "SQL 注入", "action": "已拦截", "domain": "api.appcircle.io"},
+        {"time": "12:44:11", "ip": "198.51.100.88", "type": "XSS 攻击", "action": "已拦截", "domain": "www.tigerbeetle.com"},
+        {"time": "12:42:07", "ip": "192.0.2.154", "type": "暴力破解", "action": "已挑战", "domain": "login.qdrant.tech"},
+        {"time": "12:40:55", "ip": "203.0.113.12", "type": "CC 攻击", "action": "已限流", "domain": "api.nube.sh"},
+        {"time": "12:39:41", "ip": "198.51.100.3", "type": "路径遍历", "action": "已拦截", "domain": "admin.yxvm.com"},
+        {"time": "12:37:28", "ip": "203.0.113.77", "type": "恶意爬虫", "action": "已挑战", "domain": "www.sharon.io"},
+        {"time": "12:36:14", "ip": "192.0.2.201", "type": "SQL 注入", "action": "已拦截", "domain": "api.gomami.io"},
+        {"time": "12:34:02", "ip": "198.51.100.64", "type": "文件包含", "action": "已拦截", "domain": "www.oks.llc"},
+        {"time": "12:31:49", "ip": "203.0.113.93", "type": "CC 攻击", "action": "已限流", "domain": "www.as979.net"},
+        {"time": "12:30:22", "ip": "192.0.2.18", "type": "XSS 攻击", "action": "已拦截", "domain": "api.enuoidc.com"},
+    ]
+    events_table = _simple_table(
+        columns=[
+            {"name": "时间", "id": "time"},
+            {"name": "来源 IP", "id": "ip"},
+            {"name": "威胁类型", "id": "type"},
+            {"name": "处置", "id": "action"},
+            {"name": "目标域名", "id": "domain"},
+        ],
+        data=events,
+        page_size=10,
+    )
+
+    return html.Div([
+        create_page_header("安全防护", "DDoS、WAF 与 Bot 管理统一视图"),
+        cards,
+        html.Div([html.H3("近期拦截事件"), events_table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: SSL/TLS
+# ============================================================================
+def create_ssl_page(domains):
+    """SSL/TLS 页"""
+    import random
+    random.seed(100)
+    cards = html.Div([
+        create_metric_card("活跃证书", f"{len(domains) if domains else 0}", "已签发"),
+        create_metric_card("即将过期", "3", "30 天内", COLORS["warning"]),
+        create_metric_card("TLS 1.3 覆盖率", "96.4%", "流量占比", COLORS["success"]),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(3, 1fr)"})
+
+    issuers = ["Let's Encrypt", "DigiCert", "Let's Encrypt", "Let's Encrypt", "Sectigo"]
+    cert_types = ["DV", "DV", "DV", "OV", "EV"]
+    certs = []
+    for d in (sorted(domains)[:12] if domains else ["example.com"]):
+        expire_days = random.randint(10, 90)
+        expire_status = "已签发" if expire_days > 30 else "即将过期"
+        certs.append({
+            "domain": d,
+            "issuer": random.choice(issuers),
+            "type": random.choice(cert_types),
+            "expire": f"2026-0{random.randint(5, 9)}-{random.randint(1,28):02d}",
+            "status": expire_status,
+        })
+
+    certs_table = _simple_table(
+        columns=[
+            {"name": "域名", "id": "domain"},
+            {"name": "颁发机构", "id": "issuer"},
+            {"name": "类型", "id": "type"},
+            {"name": "到期时间", "id": "expire"},
+            {"name": "状态", "id": "status"},
+        ],
+        data=certs,
+        page_size=12,
+    )
+
+    return html.Div([
+        create_page_header("SSL/TLS", "证书管理与加密配置", action_label="+ 申请证书"),
+        cards,
+        html.Div([html.H3("证书列表"), certs_table], className="chart-card"),
+        html.Div([
+            html.H3("TLS 配置"),
+            create_toggle_row("强制 HTTPS", "自动将 HTTP 重定向到 HTTPS", on=True),
+            create_toggle_row("HSTS", "HTTP 严格传输安全", on=True),
+            create_toggle_row("TLS 1.3", "启用 TLS 1.3 协议", on=True),
+            create_toggle_row("OCSP Stapling", "OCSP 装订加速握手", on=True),
+            create_toggle_row("Always Use HTTPS", "始终使用加密连接", on=False),
+        ], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: WAF 防火墙
+# ============================================================================
+def create_waf_page():
+    """WAF 页"""
+    cards = html.Div([
+        create_metric_card("托管规则", "已启用", "OWASP Top 10", COLORS["success"]),
+        create_metric_card("自定义规则", "14", "用户定义"),
+        create_metric_card("24h 命中", "12,847", "总拦截数", COLORS["danger"]),
+        create_metric_card("误报率", "0.08%", "月度平均"),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(4, 1fr)"})
+
+    rules = [
+        {"id": "WAF-001", "name": "SQL 注入检测", "action": "拦截", "hits": "4,218", "status": "启用"},
+        {"id": "WAF-002", "name": "XSS 过滤", "action": "拦截", "hits": "2,107", "status": "启用"},
+        {"id": "WAF-003", "name": "路径遍历", "action": "拦截", "hits": "891", "status": "启用"},
+        {"id": "WAF-004", "name": "文件包含", "action": "拦截", "hits": "342", "status": "启用"},
+        {"id": "WAF-005", "name": "命令注入", "action": "拦截", "hits": "178", "status": "启用"},
+        {"id": "WAF-006", "name": "恶意 User-Agent", "action": "挑战", "hits": "3,421", "status": "启用"},
+        {"id": "WAF-007", "name": "高频访问限制", "action": "限流", "hits": "1,689", "status": "启用"},
+        {"id": "CUSTOM-01", "name": "屏蔽特定国家", "action": "拦截", "hits": "0", "status": "未启用"},
+        {"id": "CUSTOM-02", "name": "API 速率限制", "action": "限流", "hits": "523", "status": "启用"},
+        {"id": "CUSTOM-03", "name": "管理后台白名单", "action": "拦截", "hits": "47", "status": "启用"},
+    ]
+    rules_table = _simple_table(
+        columns=[
+            {"name": "规则 ID", "id": "id"},
+            {"name": "名称", "id": "name"},
+            {"name": "动作", "id": "action"},
+            {"name": "24h 命中", "id": "hits"},
+            {"name": "状态", "id": "status"},
+        ],
+        data=rules,
+        page_size=12,
+    )
+
+    return html.Div([
+        create_page_header("WAF 防火墙", "Web 应用防火墙规则与策略", action_label="+ 新建规则"),
+        cards,
+        html.Div([html.H3("规则列表"), rules_table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 性能优化
+# ============================================================================
+def create_speed_page():
+    """性能优化页"""
+    protocol_card = html.Div([
+        html.H3("协议优化"),
+        create_toggle_row("HTTP/3 (QUIC)", "基于 UDP 的最新协议，降低延迟", on=True),
+        create_toggle_row("HTTP/2", "多路复用与头部压缩", on=True),
+        create_toggle_row("0-RTT", "加速 TLS 1.3 重连接", on=True),
+        create_toggle_row("Early Hints (103)", "提前发送资源预加载提示", on=False),
+    ], className="chart-card")
+
+    content_card = html.Div([
+        html.H3("内容优化"),
+        create_toggle_row("Brotli 压缩", "更高压缩率的现代算法", on=True),
+        create_toggle_row("Gzip 压缩", "向后兼容的传统压缩", on=True),
+        create_toggle_row("图片自适应", "根据设备自动优化图片格式 (WebP/AVIF)", on=True),
+        create_toggle_row("Minify CSS", "压缩 CSS 文件体积", on=True),
+        create_toggle_row("Minify JS", "压缩 JavaScript 文件体积", on=False),
+        create_toggle_row("Minify HTML", "压缩 HTML 文档", on=False),
+        create_toggle_row("Rocket Loader", "异步加载 JS，加快首屏", on=False),
+    ], className="chart-card")
+
+    network_card = html.Div([
+        html.H3("网络优化"),
+        create_toggle_row("Argo 智能路由", "动态优化节点到源站的路径", on=True),
+        create_toggle_row("Tiered Cache", "多级缓存减少源站压力", on=True),
+        create_toggle_row("Prefetch URL", "预取页面中的链接资源", on=False),
+    ], className="chart-card")
+
+    return html.Div([
+        create_page_header("性能优化", "协议、压缩与网络加速开关"),
+        html.Div([protocol_card, content_card], className="chart-row"),
+        network_card,
+    ])
+
+
+# ============================================================================
+# 页面: 流量规则
+# ============================================================================
+def create_rules_page():
+    """流量规则页"""
+    rules = [
+        {"priority": "1", "pattern": "*/admin/*", "action": "强制 HTTPS + 缓存级别: 绕过", "status": "启用"},
+        {"priority": "2", "pattern": "*/api/v2/*", "action": "禁用缓存 + 请求头: X-API-Version", "status": "启用"},
+        {"priority": "3", "pattern": "*/static/*", "action": "边缘缓存 TTL: 30 天", "status": "启用"},
+        {"priority": "4", "pattern": "*.mp4|*.webm", "action": "边缘缓存 TTL: 7 天 + 启用 Range", "status": "启用"},
+        {"priority": "5", "pattern": "*/download/*", "action": "限速: 10 MB/s", "status": "启用"},
+        {"priority": "6", "pattern": "*?utm_*", "action": "忽略查询参数", "status": "启用"},
+        {"priority": "7", "pattern": "*/legacy/*", "action": "重定向到 /new/*", "status": "启用"},
+        {"priority": "8", "pattern": "*/beta/*", "action": "仅允许白名单 IP", "status": "未启用"},
+    ]
+    rules_table = _simple_table(
+        columns=[
+            {"name": "优先级", "id": "priority"},
+            {"name": "匹配模式", "id": "pattern"},
+            {"name": "动作", "id": "action"},
+            {"name": "状态", "id": "status"},
+        ],
+        data=rules,
+        page_size=10,
+    )
+
+    return html.Div([
+        create_page_header("流量规则", "基于 URL 模式的路由与缓存规则", action_label="+ 新建规则"),
+        html.Div([
+            html.Div("规则按优先级从小到大匹配，命中后不再继续。",
+                     style={"fontSize": "13px", "color": "#64748b", "marginBottom": "12px"}),
+            rules_table,
+        ], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 负载均衡
+# ============================================================================
+def create_loadbalancer_page():
+    """负载均衡页"""
+    cards = html.Div([
+        create_metric_card("活跃池", "4", "负载均衡池"),
+        create_metric_card("健康源站", "18 / 20", "10% 降级中", COLORS["warning"]),
+        create_metric_card("平均延迟", "42 ms", "源站响应", COLORS["success"]),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(3, 1fr)"})
+
+    pools = [
+        {"name": "primary-pool-cn", "healthy": "4 / 4", "algorithm": "加权轮询", "weight": "100,100,100,100", "status": "正常"},
+        {"name": "secondary-pool-cn", "healthy": "3 / 4", "algorithm": "最少连接", "weight": "100,100,100,0", "status": "部分降级"},
+        {"name": "global-pool", "healthy": "6 / 6", "algorithm": "地理就近", "weight": "自动", "status": "正常"},
+        {"name": "api-pool-sg", "healthy": "5 / 6", "algorithm": "加权轮询", "weight": "50,50,100,100,100,100", "status": "正常"},
+    ]
+    pools_table = _simple_table(
+        columns=[
+            {"name": "池名称", "id": "name"},
+            {"name": "健康节点", "id": "healthy"},
+            {"name": "调度算法", "id": "algorithm"},
+            {"name": "权重", "id": "weight"},
+            {"name": "状态", "id": "status"},
+        ],
+        data=pools,
+        page_size=10,
+    )
+
+    origins = [
+        {"name": "origin-sh-01", "ip": "10.0.1.11", "latency": "12 ms", "health": "健康", "pool": "primary-pool-cn"},
+        {"name": "origin-sh-02", "ip": "10.0.1.12", "latency": "15 ms", "health": "健康", "pool": "primary-pool-cn"},
+        {"name": "origin-bj-01", "ip": "10.0.2.11", "latency": "28 ms", "health": "健康", "pool": "primary-pool-cn"},
+        {"name": "origin-bj-02", "ip": "10.0.2.12", "latency": "32 ms", "health": "健康", "pool": "primary-pool-cn"},
+        {"name": "origin-gz-01", "ip": "10.0.3.11", "latency": "45 ms", "health": "健康", "pool": "secondary-pool-cn"},
+        {"name": "origin-gz-02", "ip": "10.0.3.12", "latency": "-", "health": "不健康", "pool": "secondary-pool-cn"},
+    ]
+    origins_table = _simple_table(
+        columns=[
+            {"name": "源站", "id": "name"},
+            {"name": "IP", "id": "ip"},
+            {"name": "延迟", "id": "latency"},
+            {"name": "健康状态", "id": "health"},
+            {"name": "所属池", "id": "pool"},
+        ],
+        data=origins,
+        page_size=10,
+    )
+
+    return html.Div([
+        create_page_header("负载均衡", "负载均衡池与源站健康监测", action_label="+ 创建池"),
+        cards,
+        html.Div([html.H3("负载均衡池"), pools_table], className="chart-card"),
+        html.Div([html.H3("源站健康监测"), origins_table], className="chart-card"),
+    ])
+
+
+# ============================================================================
+# 页面: 实时监控
+# ============================================================================
+def create_monitor_page():
+    """实时监控页"""
+    import random
+    random.seed(123)
+
+    qps_card = html.Div([
+        html.H3("实时 QPS"),
+        html.Div([
+            html.Div("1,247", className="qps-number"),
+            html.Div("每秒请求数 · 最近 1 秒", className="qps-label"),
+        ]),
+    ], className="chart-card")
+
+    latency_card = html.Div([
+        html.H3("平均响应"),
+        html.Div([
+            html.Div("38 ms", className="qps-number", style={"color": COLORS["success"]}),
+            html.Div("边缘节点 P50", className="qps-label"),
+        ]),
+    ], className="chart-card")
+
+    bw_card = html.Div([
+        html.H3("当前带宽"),
+        html.Div([
+            html.Div("8.2 Gbps", className="qps-number", style={"color": COLORS["warning"]}),
+            html.Div("全局聚合带宽", className="qps-label"),
+        ]),
+    ], className="chart-card")
+
+    # 请求日志流
+    methods = ["GET", "GET", "GET", "POST", "GET", "PUT", "DELETE"]
+    paths = [
+        "/api/v1/users", "/static/bundle.js", "/images/hero.webp", "/api/v2/orders",
+        "/favicon.ico", "/index.html", "/api/v1/products", "/static/main.css",
+        "/api/v1/auth/login", "/uploads/avatar.jpg", "/api/v2/stats",
+        "/robots.txt", "/assets/icon.svg", "/api/v1/health", "/media/video.mp4",
+    ]
+    statuses = [200, 200, 200, 200, 200, 304, 404, 200, 500, 200, 200, 301, 200, 200, 200]
+    domains_sample = ["appcircle.io", "tigerbeetle.com", "qdrant.tech", "nube.sh", "yxvm.com"]
+
+    def status_class(s):
+        return f"log-status-{s // 100}xx"
+
+    logs = []
+    for i in range(24):
+        t = f"12:{45 - i // 4:02d}:{59 - i * 2 % 60:02d}"
+        ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+        m = random.choice(methods)
+        d = random.choice(domains_sample)
+        p = random.choice(paths)
+        s = random.choice(statuses)
+        lat = f"{random.randint(5, 180)} ms"
+        logs.append(html.Div([
+            html.Span(t, className="log-time"),
+            html.Span(ip, className="log-ip"),
+            html.Span(m, className="log-method"),
+            html.Span(str(s), className=status_class(s)),
+            html.Span(f"{d}{p}", className="log-path"),
+            html.Span(lat, className="log-latency"),
+        ], className="log-line"))
+
+    stream_card = html.Div([
+        html.H3("实时请求流"),
+        html.Div(logs, className="log-stream"),
+    ], className="chart-card")
+
+    return html.Div([
+        create_page_header("实时监控", "实时请求流与核心指标"),
+        html.Div([qps_card, latency_card, bw_card], className="chart-row",
+                 style={"gridTemplateColumns": "repeat(3, 1fr)"}),
+        stream_card,
+    ])
+
+
 def create_app(data_file=None):
     """创建 Dash 应用"""
     # 获取 SQLite 存储
@@ -960,7 +1910,7 @@ def create_app(data_file=None):
         max_date = (datetime.now() + timedelta(days=30)).date()
 
     # 创建 Dash 应用
-    app = dash.Dash(__name__, title="CDN Panel")
+    app = dash.Dash(__name__, title="CDN Panel", suppress_callback_exceptions=True)
     app.index_string = INDEX_STRING
 
     # 设置 Flask secret key 用于 session
@@ -1023,111 +1973,25 @@ def create_app(data_file=None):
 
     # 布局
     app.layout = html.Div([
+        # URL 路由
+        dcc.Location(id="url", refresh=False),
         # 隐藏组件
         dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
 
-        # 侧边栏
-        create_sidebar(auth_config),
+        # 侧边栏容器（由路由回调重新渲染以同步 active 态）
+        html.Div(create_sidebar("/overview"), id="sidebar-container"),
 
         # 主区域
         html.Div([
-            # 顶栏
-            create_topbar(auth_config),
+            # 顶栏容器（由路由回调重新渲染面包屑）
+            html.Div(create_topbar(auth_config, "/overview"), id="topbar-container"),
 
             # 内容区
-            html.Div([
-                # 时间控制
-                create_time_controls(default_start, default_end, domains),
-
-                # 汇总卡片
-                html.Div(id="summary-cards"),
-
-                # 第一排: 请求带宽 + 请求流量
-                html.Div([
-                    html.Div([
-                        dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                    html.Div([
-                        dcc.Graph(id="flux-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                ], className="chart-row"),
-
-                # 第二排: 请求数 + 命中率
-                html.Div([
-                    html.Div([
-                        dcc.Graph(id="requests-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                    html.Div([
-                        dcc.Graph(id="hitrate-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                ], className="chart-row"),
-
-                # HTTP 状态码
-                html.Div([
-                    html.Div([
-                        dcc.Graph(id="http-status-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                    html.Div([
-                        dcc.Graph(id="bs-http-status-chart", config={"displayModeBar": False})
-                    ], className="chart-card"),
-                ], className="chart-row"),
-
-                # 域名排行
-                html.Div([
-                    dcc.Graph(id="domain-ranking-chart", config={"displayModeBar": False})
-                ], className="chart-card"),
-
-                # 回源分析
-                html.Div([
-                    dcc.Graph(id="origin-analysis-chart", config={"displayModeBar": False})
-                ], className="chart-card"),
-
-                # 数据表格
-                html.Div([
-                    html.H3("详细数据"),
-                    dash_table.DataTable(
-                        id="data-table",
-                        columns=[
-                            {"name": "时间", "id": "timestamp"},
-                            {"name": "域名", "id": "domain"},
-                            {"name": "带宽 (Mbps)", "id": "bw_mbps", "type": "numeric", "format": {"specifier": ",.0f"}},
-                            {"name": "流量 (GB)", "id": "flux_gb", "type": "numeric", "format": {"specifier": ",.2f"}},
-                            {"name": "请求数", "id": "req_num", "type": "numeric", "format": {"specifier": ","}},
-                            {"name": "命中率 (%)", "id": "hit_rate", "type": "numeric", "format": {"specifier": ".1f"}},
-                            {"name": "回源数", "id": "bs_num", "type": "numeric", "format": {"specifier": ","}},
-                            {"name": "回源失败", "id": "bs_fail_num", "type": "numeric", "format": {"specifier": ","}},
-                        ],
-                        data=[],
-                        page_size=12,
-                        style_table={"overflowX": "auto"},
-                        style_cell={
-                            "textAlign": "left",
-                            "padding": "12px 16px",
-                            "fontFamily": "Inter, sans-serif",
-                            "fontSize": "13px",
-                            "border": "none",
-                            "borderBottom": "1px solid #f1f5f9",
-                        },
-                        style_header={
-                            "backgroundColor": "#f8fafc",
-                            "color": "#64748b",
-                            "fontWeight": "600",
-                            "fontSize": "12px",
-                            "textTransform": "uppercase",
-                            "letterSpacing": "0.5px",
-                            "border": "none",
-                            "borderBottom": "2px solid #e2e8f0",
-                        },
-                        style_data_conditional=[
-                            {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"},
-                            {"if": {"state": "active"}, "backgroundColor": "#eff6ff", "border": "1px solid #bfdbfe"},
-                        ],
-                        sort_action="native",
-                        filter_action="native",
-                    )
-                ], className="chart-card"),
-
-            ], className="content-area"),
+            html.Div(
+                create_overview_page(storage),
+                id="page-content",
+                className="content-area",
+            ),
         ], className="main-area"),
     ], className="app-shell")
 
@@ -1415,6 +2279,46 @@ def create_app(data_file=None):
             return dash.no_update, dash.no_update, *classes
 
         return start_val, end_val, *classes
+
+    # 路由回调：根据 URL 分发页面
+    @app.callback(
+        [
+            Output("page-content", "children"),
+            Output("sidebar-container", "children"),
+            Output("topbar-container", "children"),
+        ],
+        [Input("url", "pathname")]
+    )
+    def render_page(pathname):
+        # 归一化
+        if not pathname or pathname == "/":
+            pathname = "/overview"
+
+        page_map = {
+            "/overview": lambda: create_overview_page(storage),
+            "/analytics": lambda: create_analytics_page(default_start, default_end, domains),
+            "/domains": lambda: create_domains_page(domains),
+            "/dns": lambda: create_dns_page(domains),
+            "/cache": lambda: create_cache_page(),
+            "/security": lambda: create_security_page(),
+            "/ssl": lambda: create_ssl_page(domains),
+            "/waf": lambda: create_waf_page(),
+            "/speed": lambda: create_speed_page(),
+            "/rules": lambda: create_rules_page(),
+            "/loadbalancer": lambda: create_loadbalancer_page(),
+            "/monitor": lambda: create_monitor_page(),
+        }
+        page_fn = page_map.get(pathname)
+        if page_fn is None:
+            page = html.Div([
+                create_page_header("页面不存在", f"未找到路径 {pathname}"),
+            ])
+        else:
+            page = page_fn()
+
+        sidebar = create_sidebar(pathname)
+        topbar = create_topbar(auth_config, pathname)
+        return page, sidebar, topbar
 
     return app
 
