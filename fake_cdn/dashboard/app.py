@@ -1243,21 +1243,32 @@ def _simple_table(columns, data, page_size=15):
 # ============================================================================
 def create_overview_page(storage):
     """概览页"""
-    # 从 storage 取真实概览数据（如果可用）
+    # 使用 storage 的 SQL 聚合方法，避免加载全部记录
     try:
-        records = storage.query_logs()
-        df = process_data(records) if records else pd.DataFrame()
+        stats = storage.get_stats()
     except Exception:
-        df = pd.DataFrame()
+        stats = {}
 
-    if not df.empty:
-        time_agg = df.groupby("batch").agg({"bw_mbps": "sum"})
-        peak_gbps = time_agg["bw_mbps"].max() / 1000
-        total_tb = df["flux_gb"].sum() / 1024
-        total_req_m = df["req_num"].sum() / 1_000_000
-        active_domains = df["domain"].nunique()
-    else:
-        peak_gbps, total_tb, total_req_m, active_domains = 0, 0, 0, 0
+    total_flux_bytes = stats.get("total_flux") or 0
+    total_requests = stats.get("total_requests") or 0
+    active_domains = stats.get("domain_count") or 0
+
+    total_tb = total_flux_bytes / (1024 ** 4)
+    total_req_m = total_requests / 1_000_000
+
+    # 峰值带宽：按 start_time 聚合所有域名/地区的 bps，取最大值
+    try:
+        with storage._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(total_bps) AS peak_bps FROM ("
+                "  SELECT SUM(bw * 1.0 / interval) AS total_bps "
+                "  FROM cdn_logs WHERE interval > 0 GROUP BY start_time"
+                ")"
+            ).fetchone()
+            peak_bps = (row["peak_bps"] or 0) if row else 0
+    except Exception:
+        peak_bps = 0
+    peak_gbps = peak_bps / 1_000_000_000
 
     cards = html.Div([
         create_metric_card("峰值带宽", f"{peak_gbps:.1f} Gbps", "全局峰值"),
