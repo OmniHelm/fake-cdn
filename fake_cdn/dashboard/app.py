@@ -143,6 +143,101 @@ def load_data_from_sqlite(
     )
 
 
+def load_analytics_data(storage, start_time=None, end_time=None, domain=None):
+    """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
+
+    只加载已聚合的小结果集，而不是全部原始记录。对百万级数据至关重要。
+    返回：
+        time_rows: 每个 start_time 一行，已聚合
+        http: 单行 dict，含 http/bs_http 各状态码总数、总记录数等元数据
+        domains: Top 10 域名流量排行
+        table: 最近 500 条明细
+    """
+    where = ["interval > 0"]
+    params: list = []
+    if start_time:
+        where.append("start_time >= ?")
+        params.append(start_time)
+    if end_time:
+        where.append("start_time <= ?")
+        params.append(end_time)
+    if domain and domain != "all":
+        where.append("domain = ?")
+        params.append(domain)
+    where_sql = " AND ".join(where)
+
+    with storage._get_conn() as conn:
+        # 1. 时间点聚合（按 start_time 分组）
+        time_rows = conn.execute(
+            f"""
+            SELECT start_time,
+                   SUM(bw * 1.0 / interval) AS bps,
+                   SUM(bs_bw * 1.0 / interval) AS bs_bps,
+                   SUM(flux) AS flux,
+                   SUM(bs_flux) AS bs_flux,
+                   SUM(req_num) AS req_num,
+                   SUM(hit_num) AS hit_num,
+                   SUM(bs_num) AS bs_num,
+                   SUM(bs_fail_num) AS bs_fail_num
+            FROM cdn_logs
+            WHERE {where_sql}
+            GROUP BY start_time
+            ORDER BY start_time
+            """,
+            params,
+        ).fetchall()
+
+        # 2. HTTP 状态码总和 + 元数据
+        meta_row = conn.execute(
+            f"""
+            SELECT SUM(http_code_2xx) AS c2, SUM(http_code_3xx) AS c3,
+                   SUM(http_code_4xx) AS c4, SUM(http_code_5xx) AS c5,
+                   SUM(bs_http_code_2xx) AS bs2, SUM(bs_http_code_3xx) AS bs3,
+                   SUM(bs_http_code_4xx) AS bs4, SUM(bs_http_code_5xx) AS bs5,
+                   COUNT(*) AS total_records,
+                   COUNT(DISTINCT domain) AS domain_count,
+                   MIN(start_time) AS min_time,
+                   MAX(start_time) AS max_time
+            FROM cdn_logs
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+
+        # 3. 域名流量排行 Top 10
+        domain_rows = conn.execute(
+            f"""
+            SELECT domain, SUM(flux) AS flux, SUM(req_num) AS req_num
+            FROM cdn_logs
+            WHERE {where_sql}
+            GROUP BY domain
+            ORDER BY flux DESC
+            LIMIT 10
+            """,
+            params,
+        ).fetchall()
+
+        # 4. 最近 500 条明细
+        table_rows = conn.execute(
+            f"""
+            SELECT start_time, domain, bw, interval, flux, req_num,
+                   hit_num, bs_num, bs_fail_num
+            FROM cdn_logs
+            WHERE {where_sql}
+            ORDER BY start_time DESC
+            LIMIT 500
+            """,
+            params,
+        ).fetchall()
+
+    return {
+        "time_rows": [dict(r) for r in time_rows],
+        "meta": dict(meta_row) if meta_row else {},
+        "domains": [dict(r) for r in domain_rows],
+        "table": [dict(r) for r in table_rows],
+    }
+
+
 def process_data(records):
     """处理数据为 DataFrame (向量化实现)"""
     if not records:
@@ -273,6 +368,67 @@ def create_summary_cards(df):
         create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量", trend=flux_trend),
         create_metric_card("缓存命中率", f"{avg_hit_rate:.1f}%", "平均命中比例",
                           COLORS["success"] if avg_hit_rate >= 90 else COLORS["warning"], trend=hit_trend),
+    ], className="metrics-grid")
+
+
+def create_summary_cards_from_time_df(time_df, meta):
+    """基于 SQL 聚合后的 time_df 构建汇总卡片（省去扫全量记录）"""
+    peak_bw = time_df["bw_mbps"].max()
+    avg_bw = time_df["bw_mbps"].mean()
+
+    time_df = time_df.copy()
+    time_df["date"] = time_df["timestamp"].dt.date
+
+    def calc_95_billing(bw_series):
+        sorted_bw = bw_series.sort_values(ascending=True).values
+        n = len(sorted_bw)
+        idx = max(0, min(n - 1, int(n * 0.95) - 1))
+        return sorted_bw[idx]
+
+    daily_stats = time_df.groupby("date").agg({"bw_mbps": ["mean", calc_95_billing]})
+    daily_stats.columns = ["daily_avg", "daily_p95"]
+    daily_avg_bw = daily_stats["daily_avg"].mean()
+    daily_p95_bw = daily_stats["daily_p95"].mean()
+
+    total_flux = time_df["flux_gb"].sum()
+    total_hits = time_df["hit_num"].sum()
+    total_req = time_df["req_num"].sum()
+    avg_hit_rate = (total_hits / total_req * 100) if total_req > 0 else 0
+
+    # 趋势：按时间分前后两半比较
+    mid = time_df["start_time"].quantile(0.5)
+    first = time_df[time_df["start_time"] <= mid]
+    second = time_df[time_df["start_time"] > mid]
+
+    def trend(f, s, col, agg="sum"):
+        if f.empty or s.empty:
+            return None
+        v1 = f[col].sum() if agg == "sum" else f[col].mean()
+        v2 = s[col].sum() if agg == "sum" else s[col].mean()
+        if v1 == 0:
+            return None
+        return ((v2 / v1) - 1) * 100
+
+    def hit_trend(f, s):
+        if f.empty or s.empty:
+            return None
+        r1 = f["hit_num"].sum() / f["req_num"].sum() if f["req_num"].sum() > 0 else 0
+        r2 = s["hit_num"].sum() / s["req_num"].sum() if s["req_num"].sum() > 0 else 0
+        if r1 == 0:
+            return None
+        return ((r2 / r1) - 1) * 100
+
+    bw_trend = trend(first, second, "bw_mbps", "mean")
+    flux_trend = trend(first, second, "flux_gb")
+    h_trend = hit_trend(first, second)
+
+    return html.Div([
+        create_metric_card("峰值带宽", f"{peak_bw/1000:.1f} Gbps", f"平均 {avg_bw/1000:.1f} Gbps", trend=bw_trend),
+        create_metric_card("日平均带宽", f"{daily_avg_bw/1000:.1f} Gbps", "每日平均值"),
+        create_metric_card("日95带宽", f"{daily_p95_bw/1000:.1f} Gbps", "95th 分位计费带宽", COLORS["primary"]),
+        create_metric_card("总流量", f"{total_flux:.1f} GB", "累计传输流量", trend=flux_trend),
+        create_metric_card("缓存命中率", f"{avg_hit_rate:.1f}%", "平均命中比例",
+                          COLORS["success"] if avg_hit_rate >= 90 else COLORS["warning"], trend=h_trend),
     ], className="metrics-grid")
 
 
@@ -2030,85 +2186,78 @@ def create_app(data_file=None):
         ]
     )
     def update_all(start_datetime, end_datetime, selected_domain, n_intervals):
-        """定时刷新 + 筛选条件更新所有图表"""
-        # 转换日期时间字符串为时间戳（毫秒）
-        # datetime-local 格式: YYYY-MM-DDTHH:MM:SS 或 YYYY-MM-DDTHH:MM
+        """SQL 层聚合 + 构造全部图表（不再加载全量原始记录）"""
+        # 解析日期时间字符串
+        def parse_dt(value, end_of_day=False):
+            if not value:
+                return None
+            dt_str = value.strip().replace("T", " ")
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    dt = datetime.strptime(dt_str, fmt)
+                    return int(dt.timestamp() * 1000)
+                except ValueError:
+                    continue
+            try:
+                dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
+                if end_of_day:
+                    dt = dt.replace(hour=23, minute=59, second=59)
+                return int(dt.timestamp() * 1000)
+            except ValueError:
+                return None
+
         try:
-            if start_datetime:
-                dt_str = start_datetime.strip().replace("T", " ")
-                try:
-                    start_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    try:
-                        start_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-                    except ValueError:
-                        start_dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
-                start_time = int(start_dt.timestamp() * 1000)
-            else:
-                start_time = None
-
-            if end_datetime:
-                dt_str = end_datetime.strip().replace("T", " ")
-                try:
-                    end_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    try:
-                        end_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-                    except ValueError:
-                        end_dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
-                        end_dt = end_dt.replace(hour=23, minute=59, second=59)
-                end_time = int(end_dt.timestamp() * 1000)
-            else:
-                end_time = None
-
-            # 从 SQLite 加载数据
-            records = load_data_from_sqlite(
-                storage,
-                start_time=start_time,
-                end_time=end_time,
-                domain=selected_domain
-            )
-            df = process_data(records)
+            start_time = parse_dt(start_datetime)
+            end_time = parse_dt(end_datetime, end_of_day=True)
+            data = load_analytics_data(storage, start_time, end_time, selected_domain)
         except Exception as e:
             print(f"[错误] 加载数据失败: {e}")
             import traceback
             traceback.print_exc()
-            # 返回空状态
             return (
                 "数据加载失败", html.Div(), f"错误: {e}",
                 {}, {}, {}, {}, {}, {}, {}, {}, []
             )
 
-        # 处理空数据情况
-        if df.empty:
+        if not data["time_rows"]:
             return (
                 "暂无数据", html.Div(), "无数据",
                 {}, {}, {}, {}, {}, {}, {}, {}, []
             )
 
-        # 更新头部信息
-        header_info = f"数据范围: {df['timestamp'].min().strftime('%Y-%m-%d %H:%M')} - {df['timestamp'].max().strftime('%Y-%m-%d %H:%M')} · {len(df)} 条记录 · {df['domain'].nunique()} 个域名"
+        # 构建 time_df (规模 = 时间点数 ≈ 8640 for 30 天)
+        time_df = pd.DataFrame(data["time_rows"])
+        for col in ("bps", "bs_bps", "flux", "bs_flux", "req_num", "hit_num", "bs_num", "bs_fail_num"):
+            time_df[col] = pd.to_numeric(time_df[col], errors="coerce").fillna(0)
+        time_df["timestamp"] = pd.to_datetime(time_df["start_time"], unit="ms")
+        time_df["bw_mbps"] = time_df["bps"] / 1_000_000
+        time_df["bs_bw_mbps"] = time_df["bs_bps"] / 1_000_000
+        time_df["flux_gb"] = time_df["flux"] / (1024 ** 3)
+        time_df["bs_flux_gb"] = time_df["bs_flux"] / (1024 ** 3)
+        time_df["hit_rate"] = (
+            time_df["hit_num"] / time_df["req_num"].where(time_df["req_num"] > 0) * 100
+        ).fillna(0)
 
-        # 更新汇总卡片
-        summary = create_summary_cards(df)
+        meta = data["meta"]
 
-        # 刷新状态
+        # 头部信息
+        min_ts = pd.to_datetime(meta.get("min_time") or 0, unit="ms").strftime("%Y-%m-%d %H:%M")
+        max_ts = pd.to_datetime(meta.get("max_time") or 0, unit="ms").strftime("%Y-%m-%d %H:%M")
+        header_info = (
+            f"数据范围: {min_ts} - {max_ts} · {meta.get('total_records', 0):,} 条记录 · "
+            f"{meta.get('domain_count', 0)} 个域名"
+        )
+
+        # 汇总卡片
+        summary = create_summary_cards_from_time_df(time_df, meta)
+
         refresh_time = datetime.now().strftime("%H:%M:%S")
         refresh_status = f"上次刷新: {refresh_time} · 每 {REFRESH_INTERVAL_MS // 1000} 秒自动更新"
 
-        # 数据已在 SQL 层过滤，直接使用
-        filtered_df = df
-
-        # 聚合数据
-        time_agg = filtered_df.groupby("batch").agg({
-            "bw_mbps": "sum", "flux_gb": "sum", "req_num": "sum",
-            "hit_num": "sum", "bs_num": "sum", "hit_rate": "mean", "timestamp": "first"
-        }).reset_index()
-
-        # 1. 请求带宽趋势
+        # 1. 请求带宽
         bw_fig = go.Figure()
         bw_fig.add_trace(go.Scatter(
-            x=time_agg["timestamp"], y=time_agg["bw_mbps"],
+            x=time_df["timestamp"], y=time_df["bw_mbps"],
             name="带宽", fill="tozeroy",
             line={"color": COLORS["primary"], "width": 2},
             fillcolor="rgba(14, 165, 233, 0.08)"
@@ -2116,10 +2265,10 @@ def create_app(data_file=None):
         bw_fig = apply_chart_style(bw_fig, "请求带宽")
         bw_fig.update_yaxes(title_text="带宽 (Mbps)", title_font={"size": 11})
 
-        # 2. 请求流量趋势
+        # 2. 请求流量
         flux_fig = go.Figure()
         flux_fig.add_trace(go.Scatter(
-            x=time_agg["timestamp"], y=time_agg["flux_gb"],
+            x=time_df["timestamp"], y=time_df["flux_gb"],
             name="流量", fill="tozeroy",
             line={"color": COLORS["success"], "width": 2},
             fillcolor="rgba(16, 185, 129, 0.1)"
@@ -2127,10 +2276,10 @@ def create_app(data_file=None):
         flux_fig = apply_chart_style(flux_fig, "请求流量")
         flux_fig.update_yaxes(title_text="流量 (GB)", title_font={"size": 11})
 
-        # 3. 请求数趋势
+        # 3. 请求数
         req_fig = go.Figure()
         req_fig.add_trace(go.Scatter(
-            x=time_agg["timestamp"], y=time_agg["req_num"],
+            x=time_df["timestamp"], y=time_df["req_num"],
             name="请求数", fill="tozeroy",
             line={"color": COLORS["purple"], "width": 2},
             fillcolor="rgba(139, 92, 246, 0.1)"
@@ -2138,10 +2287,10 @@ def create_app(data_file=None):
         req_fig = apply_chart_style(req_fig, "请求数")
         req_fig.update_yaxes(title_text="请求数 (个)", title_font={"size": 11})
 
-        # 4. 命中率趋势
+        # 4. 命中率
         hitrate_fig = go.Figure()
         hitrate_fig.add_trace(go.Scatter(
-            x=time_agg["timestamp"], y=time_agg["hit_rate"],
+            x=time_df["timestamp"], y=time_df["hit_rate"],
             mode="lines+markers", name="命中率",
             line={"color": COLORS["warning"], "width": 2},
             marker={"size": 4, "color": COLORS["warning"]}
@@ -2153,12 +2302,12 @@ def create_app(data_file=None):
         hitrate_fig = apply_chart_style(hitrate_fig, "缓存命中率")
         hitrate_fig.update_yaxes(range=[80, 100])
 
-        # 4. HTTP 状态码分布
+        # 5. HTTP 状态码分布（来自 SQL meta，不需扫 df）
         http_totals = {
-            "2xx": filtered_df["http_2xx"].sum(),
-            "3xx": filtered_df["http_3xx"].sum(),
-            "4xx": filtered_df["http_4xx"].sum(),
-            "5xx": filtered_df["http_5xx"].sum(),
+            "2xx": int(meta.get("c2") or 0),
+            "3xx": int(meta.get("c3") or 0),
+            "4xx": int(meta.get("c4") or 0),
+            "5xx": int(meta.get("c5") or 0),
         }
         http_fig = go.Figure(data=[go.Pie(
             labels=list(http_totals.keys()),
@@ -2172,12 +2321,12 @@ def create_app(data_file=None):
         http_fig = apply_chart_style(http_fig, "HTTP 状态码分布")
         http_fig.update_layout(showlegend=True, legend={"orientation": "v", "x": 1, "y": 0.5})
 
-        # 5. 回源 HTTP 状态码分布
+        # 6. 回源 HTTP 状态码分布
         bs_http_totals = {
-            "2xx": filtered_df["bs_http_2xx"].sum(),
-            "3xx": filtered_df["bs_http_3xx"].sum(),
-            "4xx": filtered_df["bs_http_4xx"].sum(),
-            "5xx": filtered_df["bs_http_5xx"].sum(),
+            "2xx": int(meta.get("bs2") or 0),
+            "3xx": int(meta.get("bs3") or 0),
+            "4xx": int(meta.get("bs4") or 0),
+            "5xx": int(meta.get("bs5") or 0),
         }
         bs_http_fig = go.Figure(data=[go.Pie(
             labels=list(bs_http_totals.keys()),
@@ -2191,34 +2340,32 @@ def create_app(data_file=None):
         bs_http_fig = apply_chart_style(bs_http_fig, "回源状态码分布")
         bs_http_fig.update_layout(showlegend=True, legend={"orientation": "v", "x": 1, "y": 0.5})
 
-        # 6. 域名流量排行
-        domain_agg = filtered_df.groupby("domain").agg({
-            "flux_gb": "sum", "req_num": "sum", "hit_rate": "mean"
-        }).reset_index().sort_values("flux_gb", ascending=True).tail(10)
+        # 7. 域名流量排行（SQL top 10）
+        if data["domains"]:
+            domain_df = pd.DataFrame(data["domains"])
+            domain_df["flux_gb"] = pd.to_numeric(domain_df["flux"], errors="coerce").fillna(0) / (1024 ** 3)
+            domain_df = domain_df.sort_values("flux_gb", ascending=True)
+            domain_fig = go.Figure(go.Bar(
+                x=domain_df["flux_gb"],
+                y=domain_df["domain"],
+                orientation="h",
+                marker_color=COLORS["primary"],
+                marker_line_width=0,
+                text=[f"{v:.1f} GB" for v in domain_df["flux_gb"]],
+                textposition="outside",
+                textfont={"size": 11, "color": COLORS["text_secondary"]},
+                hovertemplate="<b>%{y}</b><br>流量: %{x:.2f} GB<extra></extra>"
+            ))
+            domain_fig = apply_chart_style(domain_fig, "域名流量排行 (Top 10)")
+            domain_fig.update_layout(showlegend=False, margin={"l": 140})
+        else:
+            domain_fig = {}
 
-        domain_fig = go.Figure(go.Bar(
-            x=domain_agg["flux_gb"],
-            y=domain_agg["domain"],
-            orientation="h",
-            marker_color=COLORS["primary"],
-            marker_line_width=0,
-            text=[f"{v:.1f} GB" for v in domain_agg["flux_gb"]],
-            textposition="outside",
-            textfont={"size": 11, "color": COLORS["text_secondary"]},
-            hovertemplate="<b>%{y}</b><br>流量: %{x:.2f} GB<extra></extra>"
-        ))
-        domain_fig = apply_chart_style(domain_fig, "域名流量排行 (Top 10)")
-        domain_fig.update_layout(showlegend=False, margin={"l": 140})
-
-        # 7. 回源分析
-        origin_agg = filtered_df.groupby("batch").agg({
-            "bs_bw_mbps": "sum", "bs_flux_gb": "sum", "bs_fail_num": "sum", "timestamp": "first"
-        }).reset_index()
-
+        # 8. 回源分析
         origin_fig = make_subplots(specs=[[{"secondary_y": True}]])
         origin_fig.add_trace(
             go.Scatter(
-                x=origin_agg["timestamp"], y=origin_agg["bs_bw_mbps"],
+                x=time_df["timestamp"], y=time_df["bs_bw_mbps"],
                 name="回源带宽", fill="tozeroy",
                 line={"color": COLORS["warning"], "width": 2},
                 fillcolor="rgba(245, 158, 11, 0.1)"
@@ -2226,7 +2373,7 @@ def create_app(data_file=None):
         )
         origin_fig.add_trace(
             go.Bar(
-                x=origin_agg["timestamp"], y=origin_agg["bs_fail_num"],
+                x=time_df["timestamp"], y=time_df["bs_fail_num"],
                 name="失败数", marker_color=COLORS["danger"], opacity=0.8, marker_line_width=0
             ), secondary_y=True
         )
@@ -2234,12 +2381,22 @@ def create_app(data_file=None):
         origin_fig.update_yaxes(title_text="回源带宽 (Mbps)", secondary_y=False, title_font={"size": 11})
         origin_fig.update_yaxes(title_text="失败数", secondary_y=True, title_font={"size": 11})
 
-        # 表格数据：只保留最近 500 条，按时间倒序，避免传输 30w 行到前端
-        TABLE_MAX_ROWS = 500
-        keep_cols = ["timestamp", "domain", "bw_mbps", "flux_gb",
-                     "req_num", "hit_rate", "bs_num", "bs_fail_num"]
-        table_df = filtered_df[keep_cols].sort_values("timestamp", ascending=False).head(TABLE_MAX_ROWS).copy()
-        table_df["timestamp"] = table_df["timestamp"].dt.strftime("%m-%d %H:%M:%S")
+        # 9. 数据表：SQL 已返回最近 500 条，这里只做格式化
+        table_rows = []
+        for r in data["table"]:
+            interval = r.get("interval") or 300
+            req = r.get("req_num") or 0
+            hit = r.get("hit_num") or 0
+            table_rows.append({
+                "timestamp": datetime.fromtimestamp((r["start_time"] or 0) / 1000).strftime("%m-%d %H:%M:%S"),
+                "domain": r.get("domain"),
+                "bw_mbps": (r.get("bw") or 0) / interval / 1_000_000,
+                "flux_gb": (r.get("flux") or 0) / (1024 ** 3),
+                "req_num": req,
+                "hit_rate": (hit / req * 100) if req > 0 else 0,
+                "bs_num": r.get("bs_num") or 0,
+                "bs_fail_num": r.get("bs_fail_num") or 0,
+            })
 
         return (
             header_info,
@@ -2248,7 +2405,7 @@ def create_app(data_file=None):
             bw_fig, flux_fig, req_fig, hitrate_fig,
             http_fig, bs_http_fig,
             domain_fig, origin_fig,
-            table_df.to_dict("records")
+            table_rows,
         )
 
     # 快捷时间范围按钮回调
