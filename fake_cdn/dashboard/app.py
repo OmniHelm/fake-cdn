@@ -1435,12 +1435,11 @@ def create_overview_page(storage):
     ], className="metrics-grid")
 
     nodes = [
-        ("华东 · 上海", "12 节点 · 正常", "green"),
-        ("华北 · 北京", "10 节点 · 正常", "green"),
-        ("华南 · 广州", "8 节点 · 正常", "green"),
-        ("新加坡", "4 节点 · 正常", "green"),
-        ("东京", "3 节点 · 正常", "green"),
-        ("法兰克福", "2 节点 · 维护中", "yellow"),
+        ("香港", "10 节点 · 正常", "green"),
+        ("日本 · 东京", "8 节点 · 正常", "green"),
+        ("新加坡", "6 节点 · 正常", "green"),
+        ("台湾 · 台北", "4 节点 · 正常", "green"),
+        ("韩国 · 首尔", "3 节点 · 维护中", "yellow"),
     ]
     node_cards = html.Div([
         html.Div([
@@ -1458,10 +1457,10 @@ def create_overview_page(storage):
         ("15 分钟前", "success", "SSL 证书自动续期完成 (appcircle.io)"),
         ("1 小时前", "warning", "WAF 拦截 127 次可疑请求 (SQL 注入)"),
         ("3 小时前", "info", "缓存规则更新: *.js 文件 TTL 调整为 7 天"),
-        ("6 小时前", "success", "法兰克福节点维护结束，服务恢复"),
+        ("6 小时前", "success", "台湾节点维护结束，服务恢复"),
         ("昨天", "info", "月度流量报告已生成"),
         ("昨天", "warning", "突发流量峰值 18.8 Gbps 触发告警"),
-        ("2 天前", "success", "全球 39 个节点健康检查通过"),
+        ("2 天前", "success", "全球 31 个节点健康检查通过"),
     ]
     timeline = html.Div([
         html.Div([
