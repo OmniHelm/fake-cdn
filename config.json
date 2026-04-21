@@ -21,6 +21,7 @@
 
   "dimensions": {
     "tenant_id": "LITTLEHCCL",
+    "project": "LITTLEHCCL",
     "domains": [
       "appcircle.io",
       "tigerbeetle.com",

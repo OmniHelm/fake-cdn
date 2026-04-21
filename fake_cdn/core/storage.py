@@ -22,6 +22,21 @@ class CDNLogStorage:
         """初始化数据库"""
         with self._get_conn() as conn:
             self._create_tables(conn)
+            self._migrate_project_column(conn)
+
+    def _migrate_project_column(self, conn):
+        """为 cdn_logs 添加 project 列（幂等迁移），并回填老数据"""
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(cdn_logs)")}
+        if "project" not in cols:
+            conn.execute("ALTER TABLE cdn_logs ADD COLUMN project TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_project ON cdn_logs(project)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_project_time ON cdn_logs(project, start_time)")
+        # 老数据回填：优先用 tenant_id，为空则设为"默认"
+        conn.execute("""
+            UPDATE cdn_logs
+            SET project = COALESCE(NULLIF(tenant_id, ''), '默认')
+            WHERE project IS NULL OR project = ''
+        """)
 
     @contextmanager
     def _get_conn(self):
@@ -41,6 +56,7 @@ class CDNLogStorage:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 start_time INTEGER NOT NULL,
                 tenant_id TEXT,
+                project TEXT,
                 domain TEXT NOT NULL,
                 country TEXT,
                 region TEXT,
@@ -75,16 +91,21 @@ class CDNLogStorage:
         if not logs:
             return
 
+        # 兜底：每条记录确保有 project 字段；若无则回退到 tenantId 或 "默认"
+        for log in logs:
+            if not log.get("project"):
+                log["project"] = log.get("tenantId") or "默认"
+
         with self._get_conn() as conn:
             conn.executemany("""
                 INSERT INTO cdn_logs (
-                    start_time, tenant_id, domain, country, region, interval,
+                    start_time, tenant_id, project, domain, country, region, interval,
                     bw, flux, bs_bw, bs_flux,
                     req_num, hit_num, bs_num, bs_fail_num, hit_flux,
                     http_code_2xx, http_code_3xx, http_code_4xx, http_code_5xx,
                     bs_http_code_2xx, bs_http_code_3xx, bs_http_code_4xx, bs_http_code_5xx
                 ) VALUES (
-                    :start_time, :tenantId, :domain, :country, :region, :interval,
+                    :start_time, :tenantId, :project, :domain, :country, :region, :interval,
                     :bw, :flux, :bs_bw, :bs_flux,
                     :req_num, :hit_num, :bs_num, :bs_fail_num, :hit_flux,
                     :http_code_2xx, :http_code_3xx, :http_code_4xx, :http_code_5xx,
@@ -99,6 +120,7 @@ class CDNLogStorage:
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         domain: Optional[str] = None,
+        project: Optional[str] = None,
         limit: Optional[int] = None
     ) -> List[Dict]:
         """查询日志"""
@@ -117,6 +139,10 @@ class CDNLogStorage:
             query += " AND domain = ?"
             params.append(domain)
 
+        if project:
+            query += " AND project = ?"
+            params.append(project)
+
         query += " ORDER BY start_time ASC"
 
         if limit:
@@ -127,27 +153,47 @@ class CDNLogStorage:
             cursor = conn.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_time_range(self) -> Tuple[Optional[int], Optional[int]]:
+    def get_time_range(self, project: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
         """获取数据时间范围"""
+        query = "SELECT MIN(start_time) as min_time, MAX(start_time) as max_time FROM cdn_logs"
+        params = []
+        if project:
+            query += " WHERE project = ?"
+            params.append(project)
         with self._get_conn() as conn:
-            cursor = conn.execute(
-                "SELECT MIN(start_time) as min_time, MAX(start_time) as max_time FROM cdn_logs"
-            )
+            cursor = conn.execute(query, params)
             row = cursor.fetchone()
             if row:
                 return row["min_time"], row["max_time"]
             return None, None
 
-    def get_domains(self) -> List[str]:
-        """获取所有域名列表"""
+    def get_domains(self, project: Optional[str] = None) -> List[str]:
+        """获取所有域名列表（可按项目过滤）"""
+        query = "SELECT DISTINCT domain FROM cdn_logs"
+        params = []
+        if project:
+            query += " WHERE project = ?"
+            params.append(project)
+        query += " ORDER BY domain"
         with self._get_conn() as conn:
-            cursor = conn.execute("SELECT DISTINCT domain FROM cdn_logs ORDER BY domain")
+            cursor = conn.execute(query, params)
             return [row["domain"] for row in cursor.fetchall()]
+
+    def get_projects(self) -> List[str]:
+        """获取所有项目列表"""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "SELECT DISTINCT project FROM cdn_logs "
+                "WHERE project IS NOT NULL AND project != '' "
+                "ORDER BY project"
+            )
+            return [row["project"] for row in cursor.fetchall()]
 
     def get_stats(
         self,
         start_time: Optional[int] = None,
-        end_time: Optional[int] = None
+        end_time: Optional[int] = None,
+        project: Optional[str] = None,
     ) -> Dict:
         """获取统计信息"""
         query = """
@@ -173,6 +219,10 @@ class CDNLogStorage:
             query += " AND start_time <= ?"
             params.append(end_time)
 
+        if project:
+            query += " AND project = ?"
+            params.append(project)
+
         with self._get_conn() as conn:
             cursor = conn.execute(query, params)
             row = cursor.fetchone()
@@ -183,6 +233,7 @@ class CDNLogStorage:
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         domain: Optional[str] = None,
+        project: Optional[str] = None,
         interval_ms: int = 300000  # 默认5分钟
     ) -> List[Dict]:
         """按时间聚合数据（用于图表）"""
@@ -222,6 +273,10 @@ class CDNLogStorage:
             query += " AND domain = ?"
             params.append(domain)
 
+        if project:
+            query += " AND project = ?"
+            params.append(project)
+
         query += " GROUP BY time_bucket ORDER BY time_bucket"
 
         with self._get_conn() as conn:
@@ -232,6 +287,7 @@ class CDNLogStorage:
         self,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
+        project: Optional[str] = None,
         limit: int = 10
     ) -> List[Dict]:
         """按域名聚合数据（用于排行榜）"""
@@ -253,6 +309,10 @@ class CDNLogStorage:
         if end_time:
             query += " AND start_time <= ?"
             params.append(end_time)
+
+        if project:
+            query += " AND project = ?"
+            params.append(project)
 
         query += " GROUP BY domain ORDER BY total_flux DESC LIMIT ?"
         params.append(limit)

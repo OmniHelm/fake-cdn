@@ -303,6 +303,7 @@ def normalize_config(config: Dict) -> Dict:
 
     dimensions = cfg.setdefault("dimensions", {})
     dimensions.setdefault("tenant_id", "fake-cdn")
+    dimensions.setdefault("project", dimensions.get("tenant_id") or "默认")
 
     domain_items = dimensions.get("domains") or []
     if not domain_items:
@@ -872,6 +873,9 @@ class CDNLogGenerator:
             logs.append(
                 {
                     "tenantId": self.config["dimensions"]["tenant_id"],
+                    "project": self.config["dimensions"].get("project")
+                        or self.config["dimensions"].get("tenant_id")
+                        or "默认",
                     "start_time": plan_point.timestamp_ms,
                     "country": item["country"],
                     "region": item["region"],

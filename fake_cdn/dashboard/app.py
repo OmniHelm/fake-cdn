@@ -7,8 +7,15 @@ CDN 推送数据可视化面板
 
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+except ImportError:
+    # Python 3.8 fallback
+    LOCAL_TZ = timezone(timedelta(hours=8))
 
 import dash
 from dash import dcc, html, dash_table
@@ -143,7 +150,7 @@ def load_data_from_sqlite(
     )
 
 
-def load_analytics_data(storage, start_time=None, end_time=None, domain=None):
+def load_analytics_data(storage, start_time=None, end_time=None, domain=None, project=None):
     """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
 
     只加载已聚合的小结果集，而不是全部原始记录。对百万级数据至关重要。
@@ -164,6 +171,9 @@ def load_analytics_data(storage, start_time=None, end_time=None, domain=None):
     if domain and domain != "all":
         where.append("domain = ?")
         params.append(domain)
+    if project and project != "all":
+        where.append("project = ?")
+        params.append(project)
     where_sql = " AND ".join(where)
 
     with storage._get_conn() as conn:
@@ -1311,8 +1321,9 @@ def create_toggle_row(title, desc, on=True):
     ], className="toggle-row")
 
 
-def create_time_controls(default_start, default_end, domains):
+def create_time_controls(default_start, default_end, domains, projects=None):
     """创建时间控制区域"""
+    projects = projects or []
     return html.Div([
         # 快捷时间按钮行
         html.Div([
@@ -1321,6 +1332,16 @@ def create_time_controls(default_start, default_end, domains):
             html.Button("最近 30 天", id="range-30d", className="time-range-btn active", n_clicks=0),
             html.Button("自定义范围", id="range-custom", className="time-range-btn", n_clicks=0),
             html.Div(className="time-range-spacer"),
+            # 项目筛选
+            html.Span("项目", className="filter-label"),
+            dcc.Dropdown(
+                id="project-filter",
+                options=[{"label": "全部项目", "value": "all"}] +
+                        [{"label": p, "value": p} for p in projects],
+                value="all",
+                style={"width": "180px"},
+                clearable=False
+            ),
             # 域名筛选
             html.Span("域名", className="filter-label"),
             dcc.Dropdown(
@@ -1490,11 +1511,11 @@ def create_overview_page(storage):
 # ============================================================================
 # 页面: 流量分析（现有功能）
 # ============================================================================
-def create_analytics_page(default_start, default_end, domains):
+def create_analytics_page(default_start, default_end, domains, projects=None):
     """流量分析页（保留现有功能）"""
     return html.Div([
         create_page_header("流量分析", "带宽、请求、缓存与回源详细指标"),
-        create_time_controls(default_start, default_end, domains),
+        create_time_controls(default_start, default_end, domains, projects),
         html.Div(id="summary-cards"),
         html.Div([
             html.Div([dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})], className="chart-card"),
@@ -2063,8 +2084,9 @@ def create_app(data_file=None):
     default_start, default_end = get_default_date_range(storage)
     min_time, max_time = storage.get_time_range()
 
-    # 获取域名列表
+    # 获取域名列表 + 项目列表
     domains = storage.get_domains()
+    projects = storage.get_projects()
 
     # 计算日期范围边界
     if min_time and max_time:
@@ -2181,19 +2203,20 @@ def create_app(data_file=None):
             Input("start-datetime", "value"),
             Input("end-datetime", "value"),
             Input("domain-filter", "value"),
+            Input("project-filter", "value"),
             Input("refresh-interval", "n_intervals")
         ]
     )
-    def update_all(start_datetime, end_datetime, selected_domain, n_intervals):
+    def update_all(start_datetime, end_datetime, selected_domain, selected_project, n_intervals):
         """SQL 层聚合 + 构造全部图表（不再加载全量原始记录）"""
-        # 解析日期时间字符串
+        # 解析日期时间字符串，统一按 Asia/Shanghai 时区解释
         def parse_dt(value, end_of_day=False):
             if not value:
                 return None
             dt_str = value.strip().replace("T", " ")
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
                 try:
-                    dt = datetime.strptime(dt_str, fmt)
+                    dt = datetime.strptime(dt_str, fmt).replace(tzinfo=LOCAL_TZ)
                     return int(dt.timestamp() * 1000)
                 except ValueError:
                     continue
@@ -2201,14 +2224,22 @@ def create_app(data_file=None):
                 dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
                 if end_of_day:
                     dt = dt.replace(hour=23, minute=59, second=59)
+                dt = dt.replace(tzinfo=LOCAL_TZ)
                 return int(dt.timestamp() * 1000)
             except ValueError:
                 return None
 
+        def fmt_ts(ms):
+            if not ms:
+                return "—"
+            return datetime.fromtimestamp(ms / 1000, tz=LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+
         try:
             start_time = parse_dt(start_datetime)
             end_time = parse_dt(end_datetime, end_of_day=True)
-            data = load_analytics_data(storage, start_time, end_time, selected_domain)
+            data = load_analytics_data(
+                storage, start_time, end_time, selected_domain, selected_project
+            )
         except Exception as e:
             print(f"[错误] 加载数据失败: {e}")
             import traceback
@@ -2239,12 +2270,13 @@ def create_app(data_file=None):
 
         meta = data["meta"]
 
-        # 头部信息
-        min_ts = pd.to_datetime(meta.get("min_time") or 0, unit="ms").strftime("%Y-%m-%d %H:%M")
-        max_ts = pd.to_datetime(meta.get("max_time") or 0, unit="ms").strftime("%Y-%m-%d %H:%M")
+        # 头部信息：显示用户选定的查询范围，而非数据实际 min/max
+        query_start = fmt_ts(start_time) if start_time else "全部"
+        query_end = fmt_ts(end_time) if end_time else "全部"
+        project_label = selected_project if selected_project and selected_project != "all" else "全部项目"
         header_info = (
-            f"数据范围: {min_ts} - {max_ts} · {meta.get('total_records', 0):,} 条记录 · "
-            f"{meta.get('domain_count', 0)} 个域名"
+            f"查询范围: {query_start} - {query_end} · 项目: {project_label} · "
+            f"{meta.get('total_records', 0):,} 条记录 · {meta.get('domain_count', 0)} 个域名"
         )
 
         # 汇总卡片
@@ -2466,7 +2498,7 @@ def create_app(data_file=None):
 
         page_map = {
             "/overview": lambda: create_overview_page(storage),
-            "/analytics": lambda: create_analytics_page(default_start, default_end, domains),
+            "/analytics": lambda: create_analytics_page(default_start, default_end, domains, projects),
             "/domains": lambda: create_domains_page(domains),
             "/dns": lambda: create_dns_page(domains),
             "/cache": lambda: create_cache_page(),
