@@ -150,16 +150,8 @@ def load_data_from_sqlite(
     )
 
 
-def load_analytics_data(storage, start_time=None, end_time=None, domain=None, project=None):
-    """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
-
-    只加载已聚合的小结果集，而不是全部原始记录。对百万级数据至关重要。
-    返回：
-        time_rows: 每个 start_time 一行，已聚合
-        http: 单行 dict，含 http/bs_http 各状态码总数、总记录数等元数据
-        domains: Top 10 域名流量排行
-        table: 最近 500 条明细
-    """
+def _build_where(start_time, end_time, domain, project):
+    """构造所有 analytics SQL 共用的 WHERE 子句，保证三页过滤口径一致"""
     where = ["interval > 0"]
     params: list = []
     if start_time:
@@ -174,7 +166,68 @@ def load_analytics_data(storage, start_time=None, end_time=None, domain=None, pr
     if project and project != "all":
         where.append("project = ?")
         params.append(project)
-    where_sql = " AND ".join(where)
+    return " AND ".join(where), params
+
+
+def _load_aggregate_meta(storage, start_time=None, end_time=None, domain=None, project=None):
+    """单条 SQL 返回时段+过滤条件下的全部聚合指标，供概览与分析页共享"""
+    where_sql, params = _build_where(start_time, end_time, domain, project)
+    with storage._get_conn() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_records,
+                COUNT(DISTINCT domain) AS domain_count,
+                MIN(start_time) AS min_time,
+                MAX(start_time) AS max_time,
+                SUM(bw) AS total_bw,
+                SUM(flux) AS total_flux,
+                SUM(req_num) AS total_requests,
+                SUM(hit_num) AS total_hits,
+                SUM(bs_num) AS total_bs,
+                SUM(bs_fail_num) AS total_bs_fail,
+                SUM(http_code_2xx) AS c2, SUM(http_code_3xx) AS c3,
+                SUM(http_code_4xx) AS c4, SUM(http_code_5xx) AS c5,
+                SUM(bs_http_code_2xx) AS bs2, SUM(bs_http_code_3xx) AS bs3,
+                SUM(bs_http_code_4xx) AS bs4, SUM(bs_http_code_5xx) AS bs5
+            FROM cdn_logs
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def _load_peak_bps(storage, start_time=None, end_time=None, domain=None, project=None):
+    """峰值带宽（bps）：按 start_time 分组求瞬时总带宽，取最大"""
+    where_sql, params = _build_where(start_time, end_time, domain, project)
+    with storage._get_conn() as conn:
+        row = conn.execute(
+            f"""
+            SELECT MAX(total_bps) AS peak_bps FROM (
+                SELECT SUM(bw * 1.0 / interval) AS total_bps
+                FROM cdn_logs WHERE {where_sql}
+                GROUP BY start_time
+            )
+            """,
+            params,
+        ).fetchone()
+    return (row["peak_bps"] or 0) if row else 0
+
+
+def load_analytics_data(storage, start_time=None, end_time=None, domain=None, project=None):
+    """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
+
+    只加载已聚合的小结果集，而不是全部原始记录。对百万级数据至关重要。
+    返回：
+        time_rows: 每个 start_time 一行，已聚合
+        http: 单行 dict，含 http/bs_http 各状态码总数、总记录数等元数据
+        domains: Top 10 域名流量排行
+        table: 最近 500 条明细
+    """
+    where_sql, params = _build_where(start_time, end_time, domain, project)
+    # meta 单独走共享函数（供概览页同步使用，保证计算口径一致）
+    meta = _load_aggregate_meta(storage, start_time, end_time, domain, project)
 
     with storage._get_conn() as conn:
         # 1. 时间点聚合（按 start_time 分组）
@@ -196,23 +249,6 @@ def load_analytics_data(storage, start_time=None, end_time=None, domain=None, pr
             """,
             params,
         ).fetchall()
-
-        # 2. HTTP 状态码总和 + 元数据
-        meta_row = conn.execute(
-            f"""
-            SELECT SUM(http_code_2xx) AS c2, SUM(http_code_3xx) AS c3,
-                   SUM(http_code_4xx) AS c4, SUM(http_code_5xx) AS c5,
-                   SUM(bs_http_code_2xx) AS bs2, SUM(bs_http_code_3xx) AS bs3,
-                   SUM(bs_http_code_4xx) AS bs4, SUM(bs_http_code_5xx) AS bs5,
-                   COUNT(*) AS total_records,
-                   COUNT(DISTINCT domain) AS domain_count,
-                   MIN(start_time) AS min_time,
-                   MAX(start_time) AS max_time
-            FROM cdn_logs
-            WHERE {where_sql}
-            """,
-            params,
-        ).fetchone()
 
         # 3. 域名流量排行 Top 10
         domain_rows = conn.execute(
@@ -242,7 +278,7 @@ def load_analytics_data(storage, start_time=None, end_time=None, domain=None, pr
 
     return {
         "time_rows": [dict(r) for r in time_rows],
-        "meta": dict(meta_row) if meta_row else {},
+        "meta": meta,
         "domains": [dict(r) for r in domain_rows],
         "table": [dict(r) for r in table_rows],
     }
@@ -292,17 +328,30 @@ def process_data(records):
     return df
 
 
+def _resolve_end_time_ms(storage):
+    """统一的"当前"基准时间：若数据最新时间晚于 1 天前则取现在；否则取 max_time
+
+    让概览（日/周/月）和分析页（24h/7d/30d）使用完全相同的时间窗口锚点，
+    保证"同一时间段"下三页数字可校验对齐。
+    """
+    now_ms = int(datetime.now(tz=LOCAL_TZ).timestamp() * 1000)
+    _, max_time = storage.get_time_range()
+    if max_time and (now_ms - max_time) > 86400 * 1000:
+        return max_time
+    return now_ms
+
+
 def get_default_date_range(storage: CDNLogStorage):
-    """获取默认日期范围（默认当天）"""
+    """获取默认日期范围：以统一基准时间向前推 7 天，对齐概览默认"周" """
     min_time, max_time = storage.get_time_range()
     if min_time is None or max_time is None:
-        # 无数据时返回当前时间范围
-        now = datetime.now()
+        now = datetime.now(tz=LOCAL_TZ)
         return now.date(), now.date()
 
-    # 默认显示当天
-    today = datetime.now().date()
-    return today, today
+    end_ms = _resolve_end_time_ms(storage)
+    end_dt = datetime.fromtimestamp(end_ms / 1000, tz=LOCAL_TZ)
+    start_dt = end_dt - timedelta(days=7)
+    return start_dt.date(), end_dt.date()
 
 
 def create_metric_card(title, value, subtitle=None, color=None, trend=None):
@@ -1321,15 +1370,20 @@ def create_toggle_row(title, desc, on=True):
     ], className="toggle-row")
 
 
-def create_time_controls(default_start, default_end, domains, projects=None):
-    """创建时间控制区域"""
+def create_time_controls(default_start_iso, default_end_iso, domains, projects=None):
+    """创建时间控制区域。
+
+    default_start_iso / default_end_iso 为精确到秒的 ISO 字符串
+    (YYYY-MM-DDTHH:MM:SS)，与概览页"周"范围使用同一基准以保证两页数据
+    可对齐。
+    """
     projects = projects or []
     return html.Div([
         # 快捷时间按钮行
         html.Div([
             html.Button("最近 24 小时", id="range-24h", className="time-range-btn", n_clicks=0),
-            html.Button("最近 7 天", id="range-7d", className="time-range-btn", n_clicks=0),
-            html.Button("最近 30 天", id="range-30d", className="time-range-btn active", n_clicks=0),
+            html.Button("最近 7 天", id="range-7d", className="time-range-btn active", n_clicks=0),
+            html.Button("最近 30 天", id="range-30d", className="time-range-btn", n_clicks=0),
             html.Button("自定义范围", id="range-custom", className="time-range-btn", n_clicks=0),
             html.Div(className="time-range-spacer"),
             # 项目筛选
@@ -1359,7 +1413,7 @@ def create_time_controls(default_start, default_end, domains, projects=None):
             dcc.Input(
                 id="start-datetime",
                 type="datetime-local",
-                value=f"{default_start}T00:00:00",
+                value=default_start_iso,
                 style={"width": "200px", "padding": "6px 10px",
                        "border": "1px solid #e2e8f0", "borderRadius": "6px", "fontSize": "13px"}
             ),
@@ -1367,7 +1421,7 @@ def create_time_controls(default_start, default_end, domains, projects=None):
             dcc.Input(
                 id="end-datetime",
                 type="datetime-local",
-                value=f"{default_end}T23:59:59",
+                value=default_end_iso,
                 style={"width": "200px", "padding": "6px 10px",
                        "border": "1px solid #e2e8f0", "borderRadius": "6px", "fontSize": "13px"}
             ),
@@ -1423,45 +1477,22 @@ OVERVIEW_RANGE_LABELS = {"day": "最近 24 小时", "week": "最近 7 天", "mon
 
 
 def _compute_overview_metrics(storage, range_key="week"):
-    """按日/周/月范围计算概览指标；基准为数据库最新时间 max_time。"""
+    """按日/周/月范围计算概览指标；与分析页共用 _load_aggregate_meta / _load_peak_bps
+    保证相同时间段下两页数字完全一致。"""
     days = OVERVIEW_RANGE_DAYS.get(range_key, 7)
-    min_time, max_time = storage.get_time_range()
-    # 基准时间：若数据库最新时间早于现在超过一天，用 max_time 为结束点；否则用现在
-    now_ms = int(datetime.now(tz=LOCAL_TZ).timestamp() * 1000)
-    if max_time and (now_ms - max_time) > 86400 * 1000:
-        end_ms = max_time
-    else:
-        end_ms = now_ms
+    end_ms = _resolve_end_time_ms(storage)
     start_ms = end_ms - days * 86400 * 1000
 
-    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
-    total_flux_bytes = stats.get("total_flux") or 0
-    total_requests = stats.get("total_requests") or 0
-    active_domains = stats.get("domain_count") or 0
-    total_bs = stats.get("total_bs") or 0
-    total_bs_fail = stats.get("total_bs_fail") or 0
+    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    total_flux_bytes = meta.get("total_flux") or 0
+    total_requests = meta.get("total_requests") or 0
+    active_domains = meta.get("domain_count") or 0
+    total_bs = meta.get("total_bs") or 0
+    total_bs_fail = meta.get("total_bs_fail") or 0
 
-    # 峰值带宽：按 start_time 聚合
-    try:
-        with storage._get_conn() as conn:
-            row = conn.execute(
-                "SELECT MAX(total_bps) AS peak_bps FROM ("
-                "  SELECT SUM(bw * 1.0 / interval) AS total_bps "
-                "  FROM cdn_logs WHERE interval > 0 "
-                "    AND start_time >= ? AND start_time <= ? "
-                "  GROUP BY start_time"
-                ")",
-                (start_ms, end_ms),
-            ).fetchone()
-            peak_bps = (row["peak_bps"] or 0) if row else 0
-    except Exception:
-        peak_bps = 0
+    peak_bps = _load_peak_bps(storage, start_time=start_ms, end_time=end_ms)
 
-    # 可用率 = 1 - 回源失败率
-    if total_bs > 0:
-        availability = (1 - total_bs_fail / total_bs) * 100
-    else:
-        availability = None
+    availability = (1 - total_bs_fail / total_bs) * 100 if total_bs > 0 else None
 
     return {
         "range_key": range_key,
@@ -1501,21 +1532,11 @@ _NODE_CONFIG = [
 
 def _compute_node_cards(storage, start_ms, end_ms):
     """按查询范围计算各节点的实时带宽和健康状态（分摊模型）"""
-    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
-    total_bw_bits = stats.get("total_bw") or 0
-    total_req = stats.get("total_requests") or 0
-
-    # 整体 5xx 比例（影响节点状态色）
-    try:
-        with storage._get_conn() as conn:
-            row = conn.execute(
-                "SELECT SUM(http_code_5xx) AS c5 FROM cdn_logs "
-                "WHERE start_time >= ? AND start_time <= ?",
-                (start_ms, end_ms),
-            ).fetchone()
-            err_ratio = ((row["c5"] or 0) / total_req) if total_req > 0 else 0
-    except Exception:
-        err_ratio = 0
+    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    total_bw_bits = meta.get("total_bw") or 0
+    total_req = meta.get("total_requests") or 0
+    c5 = meta.get("c5") or 0
+    err_ratio = (c5 / total_req) if total_req > 0 else 0
 
     duration_s = max(1, (end_ms - start_ms) / 1000)
     avg_bps = total_bw_bits / duration_s
@@ -1553,10 +1574,10 @@ def _compute_activity_timeline(storage, start_ms, end_ms):
     now_dt = datetime.now(tz=LOCAL_TZ)
     activities = []
 
-    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
-    total_req = stats.get("total_requests") or 0
-    total_hits = stats.get("total_hits") or 0
-    domain_count = stats.get("domain_count") or 0
+    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    total_req = meta.get("total_requests") or 0
+    total_hits = meta.get("total_hits") or 0
+    domain_count = meta.get("domain_count") or 0
 
     try:
         with storage._get_conn() as conn:
@@ -1703,11 +1724,11 @@ def create_overview_page(storage):
 # ============================================================================
 # 页面: 流量分析（现有功能）
 # ============================================================================
-def create_analytics_page(default_start, default_end, domains, projects=None):
+def create_analytics_page(default_start_iso, default_end_iso, domains, projects=None):
     """流量分析页（保留现有功能）"""
     return html.Div([
         create_page_header("流量分析", "带宽、请求、缓存与回源详细指标"),
-        create_time_controls(default_start, default_end, domains, projects),
+        create_time_controls(default_start_iso, default_end_iso, domains, projects),
         html.Div(id="summary-cards"),
         html.Div([
             html.Div([dcc.Graph(id="bandwidth-chart", config={"displayModeBar": False})], className="chart-card"),
@@ -2303,9 +2324,15 @@ def create_app(data_file=None):
     # 获取 SQLite 存储
     storage = get_storage()
 
-    # 获取数据范围
+    # 获取数据范围（默认时间窗口与概览页"周"对齐：以 _resolve_end_time_ms 为锚向前 7 天）
     default_start, default_end = get_default_date_range(storage)
     min_time, max_time = storage.get_time_range()
+
+    default_end_ms = _resolve_end_time_ms(storage)
+    default_end_dt = datetime.fromtimestamp(default_end_ms / 1000, tz=LOCAL_TZ)
+    default_start_dt = default_end_dt - timedelta(days=7)
+    default_start_iso = default_start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    default_end_iso = default_end_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
     # 获取域名列表 + 项目列表
     domains = storage.get_domains()
@@ -2691,15 +2718,17 @@ def create_app(data_file=None):
         btn_map = {"range-24h": 0, "range-7d": 1, "range-30d": 2, "range-custom": 3}
         classes[btn_map[btn_id]] = base + " active"
 
-        now = datetime.now()
-        end_val = now.strftime("%Y-%m-%dT%H:%M:%S")
+        # 统一时间基准：与概览页完全一致
+        end_ms = _resolve_end_time_ms(storage)
+        end_dt = datetime.fromtimestamp(end_ms / 1000, tz=LOCAL_TZ)
+        end_val = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
         if btn_id == "range-24h":
-            start_val = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+            start_val = (end_dt - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
         elif btn_id == "range-7d":
-            start_val = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+            start_val = (end_dt - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
         elif btn_id == "range-30d":
-            start_val = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+            start_val = (end_dt - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
         else:  # custom
             return dash.no_update, dash.no_update, *classes
 
@@ -2792,7 +2821,7 @@ def create_app(data_file=None):
 
         page_map = {
             "/overview": lambda: create_overview_page(storage),
-            "/analytics": lambda: create_analytics_page(default_start, default_end, domains, projects),
+            "/analytics": lambda: create_analytics_page(default_start_iso, default_end_iso, domains, projects),
             "/domains": lambda: create_domains_page(storage.get_domain_project_pairs(), projects),
             "/dns": lambda: create_dns_page(domains),
             "/cache": lambda: create_cache_page(),
