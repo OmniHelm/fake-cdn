@@ -1418,42 +1418,101 @@ def _simple_table(columns, data, page_size=15):
 # ============================================================================
 # 页面: 概览
 # ============================================================================
-def create_overview_page(storage):
-    """概览页"""
-    # 使用 storage 的 SQL 聚合方法，避免加载全部记录
-    try:
-        stats = storage.get_stats()
-    except Exception:
-        stats = {}
+OVERVIEW_RANGE_DAYS = {"day": 1, "week": 7, "month": 30}
+OVERVIEW_RANGE_LABELS = {"day": "最近 24 小时", "week": "最近 7 天", "month": "最近 30 天"}
 
+
+def _compute_overview_metrics(storage, range_key="week"):
+    """按日/周/月范围计算概览指标；基准为数据库最新时间 max_time。"""
+    days = OVERVIEW_RANGE_DAYS.get(range_key, 7)
+    min_time, max_time = storage.get_time_range()
+    # 基准时间：若数据库最新时间早于现在超过一天，用 max_time 为结束点；否则用现在
+    now_ms = int(datetime.now(tz=LOCAL_TZ).timestamp() * 1000)
+    if max_time and (now_ms - max_time) > 86400 * 1000:
+        end_ms = max_time
+    else:
+        end_ms = now_ms
+    start_ms = end_ms - days * 86400 * 1000
+
+    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
     total_flux_bytes = stats.get("total_flux") or 0
     total_requests = stats.get("total_requests") or 0
     active_domains = stats.get("domain_count") or 0
+    total_bs = stats.get("total_bs") or 0
+    total_bs_fail = stats.get("total_bs_fail") or 0
 
-    total_tb = total_flux_bytes / (1024 ** 4)
-    total_req_m = total_requests / 1_000_000
-
-    # 峰值带宽：按 start_time 聚合所有域名/地区的 bps，取最大值
+    # 峰值带宽：按 start_time 聚合
     try:
         with storage._get_conn() as conn:
             row = conn.execute(
                 "SELECT MAX(total_bps) AS peak_bps FROM ("
                 "  SELECT SUM(bw * 1.0 / interval) AS total_bps "
-                "  FROM cdn_logs WHERE interval > 0 GROUP BY start_time"
-                ")"
+                "  FROM cdn_logs WHERE interval > 0 "
+                "    AND start_time >= ? AND start_time <= ? "
+                "  GROUP BY start_time"
+                ")",
+                (start_ms, end_ms),
             ).fetchone()
             peak_bps = (row["peak_bps"] or 0) if row else 0
     except Exception:
         peak_bps = 0
-    peak_gbps = peak_bps / 1_000_000_000
 
-    cards = html.Div([
-        create_metric_card("峰值带宽", f"{peak_gbps:.1f} Gbps", "全局峰值"),
-        create_metric_card("总流量", f"{total_tb:,.2f} TB", "累计传输"),
-        create_metric_card("总请求", f"{total_req_m:,.1f} M", "累计请求数"),
-        create_metric_card("活跃域名", f"{active_domains}", "已接入域名"),
-        create_metric_card("可用率", "99.98%", "最近 30 天", COLORS["success"]),
+    # 可用率 = 1 - 回源失败率
+    if total_bs > 0:
+        availability = (1 - total_bs_fail / total_bs) * 100
+    else:
+        availability = None
+
+    return {
+        "range_key": range_key,
+        "range_label": OVERVIEW_RANGE_LABELS[range_key],
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "peak_gbps": peak_bps / 1_000_000_000,
+        "total_tb": total_flux_bytes / (1024 ** 4),
+        "total_req_m": total_requests / 1_000_000,
+        "active_domains": active_domains,
+        "availability": availability,
+    }
+
+
+def _build_overview_cards(metrics):
+    """根据 _compute_overview_metrics 的返回值构造卡片 grid"""
+    label = metrics["range_label"]
+    if metrics["availability"] is not None:
+        avail_text = f"{metrics['availability']:.2f}%"
+        avail_color = COLORS["success"] if metrics["availability"] >= 99.9 else COLORS["warning"]
+    else:
+        avail_text = "—"
+        avail_color = COLORS["text_muted"]
+
+    return html.Div([
+        create_metric_card("峰值带宽", f"{metrics['peak_gbps']:.2f} Gbps", f"{label}峰值"),
+        create_metric_card("总流量", f"{metrics['total_tb']:,.2f} TB", f"{label}累计"),
+        create_metric_card("总请求", f"{metrics['total_req_m']:,.2f} M", f"{label}累计"),
+        create_metric_card("活跃域名", f"{metrics['active_domains']}", f"{label}出现"),
+        create_metric_card("可用率", avail_text, f"{label}回源成功率", avail_color),
     ], className="metrics-grid")
+
+
+def create_overview_page(storage):
+    """概览页 (带 日/周/月 筛选 + SQL 层实时聚合)"""
+    default_range = "week"
+    metrics = _compute_overview_metrics(storage, default_range)
+    cards = _build_overview_cards(metrics)
+
+    range_bar = html.Div([
+        html.Button("日", id="overview-range-day",
+                    className="time-range-btn" + (" active" if default_range == "day" else ""),
+                    n_clicks=0),
+        html.Button("周", id="overview-range-week",
+                    className="time-range-btn" + (" active" if default_range == "week" else ""),
+                    n_clicks=0),
+        html.Button("月", id="overview-range-month",
+                    className="time-range-btn" + (" active" if default_range == "month" else ""),
+                    n_clicks=0),
+        html.Div(className="time-range-spacer"),
+    ], className="time-range-bar")
 
     nodes = [
         ("香港", "10 节点 · 正常", "green"),
@@ -1494,7 +1553,8 @@ def create_overview_page(storage):
 
     return html.Div([
         create_page_header("概览", "CDN 全局运行状态与关键指标"),
-        cards,
+        range_bar,
+        html.Div(cards, id="overview-cards"),
         html.Div([
             html.Div([
                 html.H3("全球节点状态"),
@@ -2540,6 +2600,43 @@ def create_app(data_file=None):
         proj = selected_project if selected_project and selected_project != "all" else None
         pairs = storage.get_domain_project_pairs(project=proj)
         return _build_domain_rows(pairs)
+
+    # 概览页：日/周/月 范围切换
+    @app.callback(
+        [
+            Output("overview-cards", "children"),
+            Output("overview-range-day", "className"),
+            Output("overview-range-week", "className"),
+            Output("overview-range-month", "className"),
+        ],
+        [
+            Input("overview-range-day", "n_clicks"),
+            Input("overview-range-week", "n_clicks"),
+            Input("overview-range-month", "n_clicks"),
+        ],
+        prevent_initial_call=True,
+    )
+    def update_overview_range(n_d, n_w, n_m):
+        ctx = dash.callback_context
+        btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "overview-range-week"
+        key_map = {
+            "overview-range-day": "day",
+            "overview-range-week": "week",
+            "overview-range-month": "month",
+        }
+        range_key = key_map.get(btn, "week")
+        metrics = _compute_overview_metrics(storage, range_key)
+        cards = _build_overview_cards(metrics)
+
+        def cls(b):
+            return "time-range-btn" + (" active" if b == btn else "")
+
+        return (
+            cards,
+            cls("overview-range-day"),
+            cls("overview-range-week"),
+            cls("overview-range-month"),
+        )
 
     # 路由回调：根据 URL 分发页面
     @app.callback(
