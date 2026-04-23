@@ -1264,12 +1264,9 @@ def create_sidebar(current_path="/overview"):
     ], className="sidebar")
 
 
-def create_topbar(auth_config, current_path="/overview", dep_mode="preview"):
+def create_topbar(auth_config, current_path="/overview"):
     """创建顶部信息栏"""
     page_title = PAGE_TITLES.get(current_path, "概览")
-
-    badge_text = "仅展示" if dep_mode == "preview" else "推送中"
-    badge_cls = "status-badge " + ("info" if dep_mode == "preview" else "warning")
 
     right_items = [
         html.Div([
@@ -1288,7 +1285,6 @@ def create_topbar(auth_config, current_path="/overview", dep_mode="preview"):
             "CDN Panel / ",
             html.Strong(page_title, id="breadcrumb-page"),
         ], className="topbar-breadcrumb"),
-        html.Span(badge_text, className=badge_cls, style={"marginLeft": "12px"}),
         html.Span(id="header-info", className="topbar-info"),
         html.Div(right_items, className="topbar-right"),
     ], className="topbar")
@@ -2304,19 +2300,6 @@ def create_monitor_page():
 
 def create_app(data_file=None):
     """创建 Dash 应用"""
-    # 读取 deployment 配置（platform / mode 用于顶栏徽章）
-    import json as _json
-    cfg_path = os.environ.get("FAKE_CDN_CONFIG", "./config.json")
-    platform, dep_mode = "—", "preview"
-    try:
-        with open(cfg_path, "r", encoding="utf-8") as _f:
-            _cfg = _json.load(_f)
-        _dep = _cfg.get("deployment") or {}
-        platform = _dep.get("platform", "—")
-        dep_mode = _dep.get("mode", "preview")
-    except Exception as _exc:
-        print(f"[dashboard] 未能读取 deployment 配置 ({cfg_path}): {_exc}")
-
     # 获取 SQLite 存储
     storage = get_storage()
 
@@ -2412,7 +2395,7 @@ def create_app(data_file=None):
         # 主区域
         html.Div([
             # 顶栏容器（由路由回调重新渲染面包屑）
-            html.Div(create_topbar(auth_config, "/overview", dep_mode), id="topbar-container"),
+            html.Div(create_topbar(auth_config, "/overview"), id="topbar-container"),
 
             # 内容区
             html.Div(
@@ -2830,7 +2813,7 @@ def create_app(data_file=None):
             page = page_fn()
 
         sidebar = create_sidebar(pathname)
-        topbar = create_topbar(auth_config, pathname, dep_mode)
+        topbar = create_topbar(auth_config, pathname)
         return page, sidebar, topbar
 
     return app
