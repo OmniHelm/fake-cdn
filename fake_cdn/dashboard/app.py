@@ -1476,6 +1476,172 @@ def _compute_overview_metrics(storage, range_key="week"):
     }
 
 
+def _humanize_relative(now_dt, ts_ms):
+    """返回相对时间描述：刚刚/N 分钟前/N 小时前/N 天前"""
+    dt = datetime.fromtimestamp(ts_ms / 1000, tz=LOCAL_TZ)
+    sec = int((now_dt - dt).total_seconds())
+    if sec < 60:
+        return "刚刚"
+    if sec < 3600:
+        return f"{sec // 60} 分钟前"
+    if sec < 86400:
+        return f"{sec // 3600} 小时前"
+    return f"{sec // 86400} 天前"
+
+
+# 节点分摊比例 & 节点配置（亚太五地）
+_NODE_CONFIG = [
+    ("香港",        0.30, 10),
+    ("日本 · 东京", 0.25,  8),
+    ("新加坡",      0.20,  6),
+    ("台湾 · 台北", 0.15,  4),
+    ("韩国 · 首尔", 0.10,  3),
+]
+
+
+def _compute_node_cards(storage, start_ms, end_ms):
+    """按查询范围计算各节点的实时带宽和健康状态（分摊模型）"""
+    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
+    total_bw_bits = stats.get("total_bw") or 0
+    total_req = stats.get("total_requests") or 0
+
+    # 整体 5xx 比例（影响节点状态色）
+    try:
+        with storage._get_conn() as conn:
+            row = conn.execute(
+                "SELECT SUM(http_code_5xx) AS c5 FROM cdn_logs "
+                "WHERE start_time >= ? AND start_time <= ?",
+                (start_ms, end_ms),
+            ).fetchone()
+            err_ratio = ((row["c5"] or 0) / total_req) if total_req > 0 else 0
+    except Exception:
+        err_ratio = 0
+
+    duration_s = max(1, (end_ms - start_ms) / 1000)
+    avg_bps = total_bw_bits / duration_s
+    avg_gbps = avg_bps / 1_000_000_000
+
+    def status_color(ratio):
+        if ratio > 0.02:
+            return "red"
+        if ratio > 0.005:
+            return "yellow"
+        return "green"
+
+    cards = []
+    for i, (region, share, nodes) in enumerate(_NODE_CONFIG):
+        node_gbps = avg_gbps * share
+        # 最后一个固定显示维护中，保留视觉多样性
+        if i == len(_NODE_CONFIG) - 1:
+            color = "yellow"
+            meta = f"{nodes} 节点 · 维护中"
+        else:
+            color = status_color(err_ratio)
+            meta = f"{nodes} 节点 · {node_gbps:.2f} Gbps"
+        cards.append(html.Div([
+            html.Span(className=f"status-dot {color}"),
+            html.Div([
+                html.Div(region, className="node-region"),
+                html.Div(meta, className="node-meta"),
+            ]),
+        ], className="node-card"))
+    return html.Div(cards, className="node-grid")
+
+
+def _compute_activity_timeline(storage, start_ms, end_ms):
+    """基于 SQL 查询生成最近活动时间线（8 条）"""
+    now_dt = datetime.now(tz=LOCAL_TZ)
+    activities = []
+
+    stats = storage.get_stats(start_time=start_ms, end_time=end_ms)
+    total_req = stats.get("total_requests") or 0
+    total_hits = stats.get("total_hits") or 0
+    domain_count = stats.get("domain_count") or 0
+
+    try:
+        with storage._get_conn() as conn:
+            # 1. 峰值带宽时刻
+            peak_row = conn.execute(
+                "SELECT start_time, SUM(bw * 1.0 / interval) AS bps FROM cdn_logs "
+                "WHERE interval > 0 AND start_time >= ? AND start_time <= ? "
+                "GROUP BY start_time ORDER BY bps DESC LIMIT 1",
+                (start_ms, end_ms),
+            ).fetchone()
+            # 2. 回源失败最多的域名
+            fail_row = conn.execute(
+                "SELECT domain, SUM(bs_fail_num) AS f FROM cdn_logs "
+                "WHERE start_time >= ? AND start_time <= ? "
+                "GROUP BY domain ORDER BY f DESC LIMIT 1",
+                (start_ms, end_ms),
+            ).fetchone()
+            # 3. Top 请求域名
+            top_req_row = conn.execute(
+                "SELECT domain, SUM(req_num) AS r FROM cdn_logs "
+                "WHERE start_time >= ? AND start_time <= ? "
+                "GROUP BY domain ORDER BY r DESC LIMIT 1",
+                (start_ms, end_ms),
+            ).fetchone()
+            # 4. 项目数
+            proj_row = conn.execute(
+                "SELECT COUNT(DISTINCT project) AS c FROM cdn_logs "
+                "WHERE start_time >= ? AND start_time <= ?",
+                (start_ms, end_ms),
+            ).fetchone()
+    except Exception:
+        peak_row = fail_row = top_req_row = proj_row = None
+
+    _, max_time = storage.get_time_range()
+
+    if peak_row and peak_row["bps"]:
+        peak_gbps = peak_row["bps"] / 1_000_000_000
+        activities.append((
+            _humanize_relative(now_dt, peak_row["start_time"]),
+            "warning",
+            f"突发流量峰值 {peak_gbps:.2f} Gbps 触发告警",
+        ))
+
+    if fail_row and fail_row["f"]:
+        activities.append((
+            "近 24h",
+            "warning",
+            f"{fail_row['domain']} 回源失败 {int(fail_row['f']):,} 次",
+        ))
+
+    if total_req > 0:
+        rate = total_hits / total_req * 100
+        activities.append(("近 24h", "info", f"平均缓存命中率 {rate:.2f}%"))
+
+    if top_req_row and top_req_row["r"]:
+        activities.append((
+            "近 24h",
+            "info",
+            f"请求 Top: {top_req_row['domain']} ({top_req_row['r']/1e6:.2f} M)",
+        ))
+
+    if domain_count:
+        activities.append(("近 24h", "info", f"活跃域名 {domain_count} 个 · 总请求 {total_req/1e6:.2f} M"))
+
+    if proj_row and proj_row["c"]:
+        activities.append(("刚刚", "success", f"活跃项目 {proj_row['c']} 个 · 数据持续推送"))
+
+    if max_time:
+        ts_str = datetime.fromtimestamp(max_time / 1000, tz=LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+        activities.append((_humanize_relative(now_dt, max_time), "success", f"最新数据到达 {ts_str}"))
+
+    activities.append(("6 小时前", "success", "SSL 证书自动续期完成"))
+    activities.append(("昨天", "success", "全球 31 个节点健康检查通过"))
+
+    items = [
+        html.Div([
+            html.Span(t, className="timeline-time"),
+            html.Span(className=f"timeline-icon {var}"),
+            html.Span(desc, className="timeline-desc"),
+        ], className="timeline-item")
+        for t, var, desc in activities[:8]
+    ]
+    return html.Div(items)
+
+
 def _build_overview_cards(metrics):
     """根据 _compute_overview_metrics 的返回值构造卡片 grid"""
     label = metrics["range_label"]
@@ -1514,42 +1680,8 @@ def create_overview_page(storage):
         html.Div(className="time-range-spacer"),
     ], className="time-range-bar")
 
-    nodes = [
-        ("香港", "10 节点 · 正常", "green"),
-        ("日本 · 东京", "8 节点 · 正常", "green"),
-        ("新加坡", "6 节点 · 正常", "green"),
-        ("台湾 · 台北", "4 节点 · 正常", "green"),
-        ("韩国 · 首尔", "3 节点 · 维护中", "yellow"),
-    ]
-    node_cards = html.Div([
-        html.Div([
-            html.Span(className=f"status-dot {color}"),
-            html.Div([
-                html.Div(region, className="node-region"),
-                html.Div(meta, className="node-meta"),
-            ]),
-        ], className="node-card")
-        for region, meta, color in nodes
-    ], className="node-grid")
-
-    activities = [
-        ("2 分钟前", "info", "新域名 api.example.com 接入成功"),
-        ("15 分钟前", "success", "SSL 证书自动续期完成 (appcircle.io)"),
-        ("1 小时前", "warning", "WAF 拦截 127 次可疑请求 (SQL 注入)"),
-        ("3 小时前", "info", "缓存规则更新: *.js 文件 TTL 调整为 7 天"),
-        ("6 小时前", "success", "台湾节点维护结束，服务恢复"),
-        ("昨天", "info", "月度流量报告已生成"),
-        ("昨天", "warning", "突发流量峰值 18.8 Gbps 触发告警"),
-        ("2 天前", "success", "全球 31 个节点健康检查通过"),
-    ]
-    timeline = html.Div([
-        html.Div([
-            html.Span(t, className="timeline-time"),
-            html.Span(className=f"timeline-icon {var}"),
-            html.Span(desc, className="timeline-desc"),
-        ], className="timeline-item")
-        for t, var, desc in activities
-    ])
+    node_cards = _compute_node_cards(storage, metrics["start_ms"], metrics["end_ms"])
+    timeline = _compute_activity_timeline(storage, metrics["start_ms"], metrics["end_ms"])
 
     return html.Div([
         create_page_header("概览", "CDN 全局运行状态与关键指标"),
@@ -1558,11 +1690,11 @@ def create_overview_page(storage):
         html.Div([
             html.Div([
                 html.H3("全球节点状态"),
-                node_cards,
+                html.Div(node_cards, id="overview-nodes"),
             ], className="chart-card"),
             html.Div([
                 html.H3("最近活动"),
-                timeline,
+                html.Div(timeline, id="overview-timeline"),
             ], className="chart-card"),
         ], className="chart-row"),
     ])
@@ -2605,6 +2737,8 @@ def create_app(data_file=None):
     @app.callback(
         [
             Output("overview-cards", "children"),
+            Output("overview-nodes", "children"),
+            Output("overview-timeline", "children"),
             Output("overview-range-day", "className"),
             Output("overview-range-week", "className"),
             Output("overview-range-month", "className"),
@@ -2627,12 +2761,16 @@ def create_app(data_file=None):
         range_key = key_map.get(btn, "week")
         metrics = _compute_overview_metrics(storage, range_key)
         cards = _build_overview_cards(metrics)
+        nodes_html = _compute_node_cards(storage, metrics["start_ms"], metrics["end_ms"])
+        timeline_html = _compute_activity_timeline(storage, metrics["start_ms"], metrics["end_ms"])
 
         def cls(b):
             return "time-range-btn" + (" active" if b == btn else "")
 
         return (
             cards,
+            nodes_html,
+            timeline_html,
             cls("overview-range-day"),
             cls("overview-range-week"),
             cls("overview-range-month"),
