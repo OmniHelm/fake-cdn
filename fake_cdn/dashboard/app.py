@@ -1568,48 +1568,79 @@ def create_analytics_page(default_start, default_end, domains, projects=None):
 # ============================================================================
 # 页面: 域名管理
 # ============================================================================
-def create_domains_page(domains):
-    """域名管理页"""
+def _build_domain_rows(pairs):
+    """根据 (domain, project) 列表生成域名管理表格行（静态 mock 属性，稳定种子）"""
     import random
-    random.seed(42)
-
     cache_modes = ["标准", "激进缓存", "兼容模式"]
     statuses = [("已激活", "active")] * 8 + [("待验证", "pending"), ("告警", "warning")]
     rows = []
-    domain_list = sorted(domains) if domains else [f"example{i}.com" for i in range(20)]
-    for i, d in enumerate(domain_list):
-        st_text, st_var = random.choice(statuses)
-        origin_ip = f"{random.randint(10, 200)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-        created = f"2025-{random.randint(1,12):02d}-{random.randint(1,28):02d}"
+    for p in pairs:
+        domain = p["domain"]
+        project = p["project"]
+        # 用域名作为种子，保证每次刷新同一域名属性稳定
+        r = random.Random(hash(domain) & 0xFFFFFFFF)
+        st_text, _ = r.choice(statuses)
+        origin_ip = f"{r.randint(10, 200)}.{r.randint(0, 255)}.{r.randint(0, 255)}.{r.randint(1, 254)}"
+        created = f"2025-{r.randint(1, 12):02d}-{r.randint(1, 28):02d}"
         rows.append({
-            "domain": d,
+            "project": project,
+            "domain": domain,
             "status": st_text,
             "ssl": "已启用" if st_text == "已激活" else "配置中",
             "origin": origin_ip,
-            "cache": random.choice(cache_modes),
+            "cache": r.choice(cache_modes),
             "created": created,
         })
+    return rows
 
-    table = _simple_table(
-        columns=[
-            {"name": "域名", "id": "domain"},
-            {"name": "状态", "id": "status"},
-            {"name": "SSL", "id": "ssl"},
-            {"name": "源站 IP", "id": "origin"},
-            {"name": "缓存模式", "id": "cache"},
-            {"name": "创建时间", "id": "created"},
-        ],
-        data=rows,
-        page_size=20,
-    )
+
+def create_domains_page(pairs, projects):
+    """域名管理页（带项目筛选）"""
+    rows = _build_domain_rows(pairs)
 
     return html.Div([
         create_page_header(
             "域名管理",
-            f"管理已接入的 {len(domain_list)} 个域名",
+            f"管理已接入的 {len(rows)} 个域名",
             action_label="+ 添加域名",
         ),
-        html.Div([table], className="chart-card"),
+        html.Div([
+            # 顶部项目筛选
+            html.Div([
+                html.Span("项目", className="filter-label"),
+                dcc.Dropdown(
+                    id="domain-project-filter",
+                    options=[{"label": "全部项目", "value": "all"}] +
+                            [{"label": p, "value": p} for p in projects],
+                    value="all",
+                    style={"width": "240px"},
+                    clearable=False,
+                ),
+            ], style={"display": "flex", "alignItems": "center", "gap": "12px",
+                      "marginBottom": "16px"}),
+            dash_table.DataTable(
+                id="domains-table",
+                columns=[
+                    {"name": "项目", "id": "project"},
+                    {"name": "域名", "id": "domain"},
+                    {"name": "状态", "id": "status"},
+                    {"name": "SSL", "id": "ssl"},
+                    {"name": "源站 IP", "id": "origin"},
+                    {"name": "缓存模式", "id": "cache"},
+                    {"name": "创建时间", "id": "created"},
+                ],
+                data=rows,
+                page_size=20,
+                style_table={"overflowX": "auto"},
+                style_cell=TABLE_STYLE_CELL,
+                style_header=TABLE_STYLE_HEADER,
+                style_data_conditional=[
+                    {"if": {"row_index": "odd"}, "backgroundColor": "#fafafa"},
+                ],
+                sort_action="native",
+                filter_action="native",
+            ),
+        ], className="chart-card"),
     ])
 
 
@@ -2482,6 +2513,34 @@ def create_app(data_file=None):
 
         return start_val, end_val, *classes
 
+    # 分析页：选中项目后，域名下拉只展示该项目下的域名
+    @app.callback(
+        [
+            Output("domain-filter", "options"),
+            Output("domain-filter", "value"),
+        ],
+        [Input("project-filter", "value")],
+        prevent_initial_call=True,
+    )
+    def filter_domains_by_project(selected_project):
+        proj = selected_project if selected_project and selected_project != "all" else None
+        project_domains = storage.get_domains(project=proj)
+        options = [{"label": "全部域名", "value": "all"}] + [
+            {"label": d, "value": d} for d in sorted(project_domains)
+        ]
+        return options, "all"
+
+    # 域名管理页：按项目筛选表格
+    @app.callback(
+        Output("domains-table", "data"),
+        [Input("domain-project-filter", "value")],
+        prevent_initial_call=True,
+    )
+    def refresh_domains_table(selected_project):
+        proj = selected_project if selected_project and selected_project != "all" else None
+        pairs = storage.get_domain_project_pairs(project=proj)
+        return _build_domain_rows(pairs)
+
     # 路由回调：根据 URL 分发页面
     @app.callback(
         [
@@ -2499,7 +2558,7 @@ def create_app(data_file=None):
         page_map = {
             "/overview": lambda: create_overview_page(storage),
             "/analytics": lambda: create_analytics_page(default_start, default_end, domains, projects),
-            "/domains": lambda: create_domains_page(domains),
+            "/domains": lambda: create_domains_page(storage.get_domain_project_pairs(), projects),
             "/dns": lambda: create_dns_page(domains),
             "/cache": lambda: create_cache_page(),
             "/security": lambda: create_security_page(),

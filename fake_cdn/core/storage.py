@@ -189,6 +189,20 @@ class CDNLogStorage:
             )
             return [row["project"] for row in cursor.fetchall()]
 
+    def get_domain_project_pairs(self, project: Optional[str] = None) -> List[Dict]:
+        """获取 (domain, project) 组合，用于域名管理页"""
+        query = (
+            "SELECT DISTINCT domain, project FROM cdn_logs "
+            "WHERE project IS NOT NULL AND project != ''"
+        )
+        params: list = []
+        if project:
+            query += " AND project = ?"
+            params.append(project)
+        query += " ORDER BY project, domain"
+        with self._get_conn() as conn:
+            return [dict(r) for r in conn.execute(query, params).fetchall()]
+
     def get_stats(
         self,
         start_time: Optional[int] = None,
