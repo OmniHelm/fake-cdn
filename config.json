@@ -1,4 +1,10 @@
 {
+  "deployment": {
+    "platform": "CUG",
+    "mode": "preview",
+    "comment": "mode: preview = 纯本地展示, 不推真实 API; push = 推送到 CDN_API_ENDPOINT"
+  },
+
   "target": {
     "mode": "flux_window",
     "total_flux": {

@@ -87,6 +87,8 @@ def print_config_summary(config: Dict) -> None:
     print(f"[配置] 等效平均带宽: {summary['equivalent_avg_gbps']:.2f} Gbps")
     print(f"[配置] 域名数 / 地区数: {summary['domain_count']} / {summary['region_count']}")
     print(f"[配置] Dry-Run: {config['mode']['dry_run']}")
+    deployment = config.get("deployment", {})
+    print(f"[配置] 部署: {deployment.get('platform', '—')} ({deployment.get('mode', 'preview')})")
     print()
 
 

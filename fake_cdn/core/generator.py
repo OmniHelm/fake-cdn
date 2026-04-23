@@ -375,11 +375,23 @@ def normalize_config(config: Dict) -> Dict:
     api.setdefault("retry", 3)
     api.setdefault("batch_size", 10)
 
+    deployment = cfg.setdefault("deployment", {})
+    deployment.setdefault("platform", "CUG")
+    deployment.setdefault("mode", "preview")
+    if deployment["mode"] not in ("preview", "push"):
+        raise ValueError(
+            f"deployment.mode 必须是 preview 或 push，收到 {deployment['mode']!r}"
+        )
+
     mode = cfg.setdefault("mode", {})
     mode.setdefault("run_mode", "simulation")
     mode.setdefault("dry_run", True)
     mode.setdefault("save_local", True)
     mode.setdefault("output_dir", "./output")
+
+    # preview 模式强制 dry_run=true，消除"看着推了其实没推"歧义
+    if deployment["mode"] == "preview":
+        mode["dry_run"] = True
 
     # 归一化 weekday 因子，缺失键回退默认值
     normalized_weekdays = DEFAULT_WEEKDAY_FACTORS.copy()
