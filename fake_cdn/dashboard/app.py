@@ -215,6 +215,36 @@ def _load_peak_bps(storage, start_time=None, end_time=None, domain=None, project
     return (row["peak_bps"] or 0) if row else 0
 
 
+def _load_daily_stats(storage, start_time=None, end_time=None, domain=None, project=None):
+    """按自然日（Asia/Shanghai）聚合：日流量/日请求/日命中率/日峰值带宽"""
+    where_sql, params = _build_where(start_time, end_time, domain, project)
+    # SQLite 的 date() 支持 unixepoch 转换；+8 hours 对齐 Asia/Shanghai
+    with storage._get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT d, SUM(flux) AS flux, SUM(req) AS req,
+                   SUM(hit) AS hit, SUM(bs_num) AS bs_num, SUM(bs_fail) AS bs_fail,
+                   MAX(bps) AS peak_bps
+            FROM (
+                SELECT date(start_time/1000, 'unixepoch', '+8 hours') AS d,
+                       start_time,
+                       SUM(flux) AS flux,
+                       SUM(req_num) AS req,
+                       SUM(hit_num) AS hit,
+                       SUM(bs_num) AS bs_num,
+                       SUM(bs_fail_num) AS bs_fail,
+                       SUM(bw * 1.0 / interval) AS bps
+                FROM cdn_logs WHERE {where_sql}
+                GROUP BY start_time
+            )
+            GROUP BY d
+            ORDER BY d
+            """,
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def load_analytics_data(storage, start_time=None, end_time=None, domain=None, project=None):
     """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
 
@@ -1109,6 +1139,27 @@ INDEX_STRING = '''
                 font-size: 12px;
                 color: #334155;
             }
+
+            /* ===== 打印样式（导出 PDF 专用） ===== */
+            @media print {
+                body, .app-shell, .main-area { height: auto !important; overflow: visible !important; }
+                .sidebar, #sidebar-container,
+                .topbar, #topbar-container,
+                #report-toolbar,
+                .time-range-bar,
+                .filter-bar {
+                    display: none !important;
+                }
+                .content-area { padding: 0 !important; overflow: visible !important; }
+                .chart-card, .metric-card {
+                    page-break-inside: avoid;
+                    box-shadow: none !important;
+                }
+                .chart-row { page-break-inside: avoid; }
+                .metrics-grid { page-break-inside: avoid; }
+                .page-header { page-break-after: avoid; }
+                a, button { color: inherit !important; }
+            }
         </style>
     </head>
     <body>
@@ -1251,6 +1302,7 @@ PAGE_TITLES = {
     "/": "概览",
     "/overview": "概览",
     "/analytics": "流量分析",
+    "/report": "月度报告",
     "/domains": "域名管理",
     "/dns": "DNS 记录",
     "/cache": "缓存",
@@ -1260,7 +1312,6 @@ PAGE_TITLES = {
     "/speed": "性能优化",
     "/rules": "流量规则",
     "/loadbalancer": "负载均衡",
-    "/monitor": "实时监控",
 }
 
 
@@ -1288,6 +1339,7 @@ def create_sidebar(current_path="/overview"):
         html.Div("主要", className="sidebar-section"),
         nav_item("dashboard", "概览", "/overview"),
         nav_item("analytics", "流量分析", "/analytics"),
+        nav_item("summarize", "月度报告", "/report"),
         nav_item("language", "域名管理", "/domains"),
         nav_item("dns", "DNS 记录", "/dns"),
 
@@ -1303,7 +1355,6 @@ def create_sidebar(current_path="/overview"):
         html.Div("网络", className="sidebar-section"),
         nav_item("tune", "流量规则", "/rules"),
         nav_item("cloud_sync", "负载均衡", "/loadbalancer"),
-        nav_item("monitoring", "实时监控", "/monitor"),
 
         # 底部状态
         html.Div([
@@ -2243,79 +2294,255 @@ def create_loadbalancer_page():
 
 
 # ============================================================================
-# 页面: 实时监控
+# 页面: 月度报告
 # ============================================================================
-def create_monitor_page():
-    """实时监控页"""
-    import random
-    random.seed(123)
+def _list_available_months(storage):
+    """返回数据库内覆盖到的月份列表（YYYY-MM 字符串，降序）"""
+    min_time, max_time = storage.get_time_range()
+    if not min_time or not max_time:
+        return []
+    start_dt = datetime.fromtimestamp(min_time / 1000, tz=LOCAL_TZ).replace(day=1)
+    end_dt = datetime.fromtimestamp(max_time / 1000, tz=LOCAL_TZ).replace(day=1)
+    months = []
+    cur = start_dt
+    while cur <= end_dt:
+        months.append(cur.strftime("%Y-%m"))
+        # 下个月
+        y, m = cur.year, cur.month
+        if m == 12:
+            cur = cur.replace(year=y + 1, month=1)
+        else:
+            cur = cur.replace(month=m + 1)
+    return list(reversed(months))
 
-    qps_card = html.Div([
-        html.H3("实时 QPS"),
-        html.Div([
-            html.Div("1,247", className="qps-number"),
-            html.Div("每秒请求数 · 最近 1 秒", className="qps-label"),
-        ]),
-    ], className="chart-card")
 
-    latency_card = html.Div([
-        html.H3("平均响应"),
-        html.Div([
-            html.Div("38 ms", className="qps-number", style={"color": COLORS["success"]}),
-            html.Div("边缘节点 P50", className="qps-label"),
-        ]),
-    ], className="chart-card")
+def _month_bounds(month_str):
+    """YYYY-MM → (start_ms, end_ms) 覆盖该自然月"""
+    y, m = map(int, month_str.split("-"))
+    start = datetime(y, m, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+    if m == 12:
+        end = datetime(y + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ) - timedelta(seconds=1)
+    else:
+        end = datetime(y, m + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ) - timedelta(seconds=1)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
-    bw_card = html.Div([
-        html.H3("当前带宽"),
-        html.Div([
-            html.Div("8.2 Gbps", className="qps-number", style={"color": COLORS["warning"]}),
-            html.Div("全局聚合带宽", className="qps-label"),
-        ]),
-    ], className="chart-card")
 
-    # 请求日志流
-    methods = ["GET", "GET", "GET", "POST", "GET", "PUT", "DELETE"]
-    paths = [
-        "/api/v1/users", "/static/bundle.js", "/images/hero.webp", "/api/v2/orders",
-        "/favicon.ico", "/index.html", "/api/v1/products", "/static/main.css",
-        "/api/v1/auth/login", "/uploads/avatar.jpg", "/api/v2/stats",
-        "/robots.txt", "/assets/icon.svg", "/api/v1/health", "/media/video.mp4",
-    ]
-    statuses = [200, 200, 200, 200, 200, 304, 404, 200, 500, 200, 200, 301, 200, 200, 200]
-    domains_sample = ["appcircle.io", "tigerbeetle.com", "qdrant.tech", "nube.sh", "yxvm.com"]
+def _build_report_content(storage, month_str, project):
+    """构造月度报告主体（供初始化与回调复用）"""
+    if not month_str:
+        return html.Div("暂无数据", style={"color": "#94a3b8", "padding": "40px", "textAlign": "center"})
 
-    def status_class(s):
-        return f"log-status-{s // 100}xx"
+    start_ms, end_ms = _month_bounds(month_str)
+    proj = project if project and project != "all" else None
 
-    logs = []
-    for i in range(24):
-        t = f"12:{45 - i // 4:02d}:{59 - i * 2 % 60:02d}"
-        ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-        m = random.choice(methods)
-        d = random.choice(domains_sample)
-        p = random.choice(paths)
-        s = random.choice(statuses)
-        lat = f"{random.randint(5, 180)} ms"
-        logs.append(html.Div([
-            html.Span(t, className="log-time"),
-            html.Span(ip, className="log-ip"),
-            html.Span(m, className="log-method"),
-            html.Span(str(s), className=status_class(s)),
-            html.Span(f"{d}{p}", className="log-path"),
-            html.Span(lat, className="log-latency"),
-        ], className="log-line"))
+    meta = _load_aggregate_meta(storage, start_ms, end_ms, project=proj)
+    peak_bps = _load_peak_bps(storage, start_ms, end_ms, project=proj)
+    daily = _load_daily_stats(storage, start_ms, end_ms, project=proj)
 
-    stream_card = html.Div([
-        html.H3("实时请求流"),
-        html.Div(logs, className="log-stream"),
-    ], className="chart-card")
+    total_flux_tb = (meta.get("total_flux") or 0) / (1024 ** 4)
+    total_req = meta.get("total_requests") or 0
+    total_hits = meta.get("total_hits") or 0
+    total_bs = meta.get("total_bs") or 0
+    total_bs_fail = meta.get("total_bs_fail") or 0
+    domain_count = meta.get("domain_count") or 0
+    hit_rate = (total_hits / total_req * 100) if total_req > 0 else 0
+    avail = (1 - total_bs_fail / total_bs) * 100 if total_bs > 0 else None
+    peak_gbps = peak_bps / 1_000_000_000
+
+    # 日平均 / 日 95 带宽
+    if daily:
+        daily_peaks_gbps = [(r["peak_bps"] or 0) / 1_000_000_000 for r in daily]
+        daily_avg_gbps = sum(daily_peaks_gbps) / len(daily_peaks_gbps)
+        sorted_peaks = sorted(daily_peaks_gbps)
+        p95_idx = max(0, min(len(sorted_peaks) - 1, int(len(sorted_peaks) * 0.95) - 1))
+        daily_p95_gbps = sorted_peaks[p95_idx]
+    else:
+        daily_avg_gbps = daily_p95_gbps = 0
+
+    project_label = proj if proj else "全部项目"
+
+    # 概要卡片
+    summary = html.Div([
+        create_metric_card("总流量", f"{total_flux_tb:,.2f} TB", f"{month_str} 累计"),
+        create_metric_card("总请求", f"{total_req/1e6:,.2f} M", "累计请求数"),
+        create_metric_card("峰值带宽", f"{peak_gbps:.2f} Gbps", "月内瞬时峰值", COLORS["primary"]),
+        create_metric_card("日 95 带宽", f"{daily_p95_gbps:.2f} Gbps", "每日峰值 P95"),
+        create_metric_card("平均命中率", f"{hit_rate:.2f}%", "流量命中率",
+                           COLORS["success"] if hit_rate >= 90 else COLORS["warning"]),
+        create_metric_card("可用率", f"{avail:.2f}%" if avail is not None else "—",
+                           "回源成功率",
+                           COLORS["success"] if (avail or 0) >= 99.9 else COLORS["warning"]),
+    ], className="metrics-grid", style={"gridTemplateColumns": "repeat(6, 1fr)"})
+
+    # 日趋势图（流量 + 峰值带宽双轴）
+    trend_fig = make_subplots(specs=[[{"secondary_y": True}]])
+    dates = [r["d"] for r in daily]
+    flux_gb = [(r["flux"] or 0) / (1024 ** 3) for r in daily]
+    peaks_gbps = [(r["peak_bps"] or 0) / 1e9 for r in daily]
+    trend_fig.add_trace(
+        go.Bar(x=dates, y=flux_gb, name="日流量 (GB)",
+               marker_color=COLORS["primary"], opacity=0.6, marker_line_width=0),
+        secondary_y=False,
+    )
+    trend_fig.add_trace(
+        go.Scatter(x=dates, y=peaks_gbps, name="日峰值带宽 (Gbps)",
+                   mode="lines+markers",
+                   line={"color": COLORS["warning"], "width": 2},
+                   marker={"size": 6}),
+        secondary_y=True,
+    )
+    trend_fig = apply_chart_style(trend_fig, "每日流量与峰值带宽")
+    trend_fig.update_yaxes(title_text="流量 (GB)", secondary_y=False, title_font={"size": 11})
+    trend_fig.update_yaxes(title_text="峰值 (Gbps)", secondary_y=True, title_font={"size": 11})
+
+    # 域名 Top 10
+    with storage._get_conn() as conn:
+        where_sql, params = _build_where(start_ms, end_ms, None, proj)
+        top_rows = conn.execute(
+            f"""
+            SELECT domain, SUM(flux) AS flux, SUM(req_num) AS req, SUM(hit_num) AS hit
+            FROM cdn_logs WHERE {where_sql}
+            GROUP BY domain ORDER BY flux DESC LIMIT 10
+            """,
+            params,
+        ).fetchall()
+    top_df = pd.DataFrame([dict(r) for r in top_rows]) if top_rows else pd.DataFrame()
+    if not top_df.empty:
+        top_df["flux_gb"] = top_df["flux"] / (1024 ** 3)
+        top_df["hit_rate"] = (top_df["hit"] / top_df["req"].where(top_df["req"] > 0) * 100).fillna(0)
+        top_df = top_df.sort_values("flux_gb", ascending=True)
+        top_fig = go.Figure(go.Bar(
+            x=top_df["flux_gb"], y=top_df["domain"], orientation="h",
+            marker_color=COLORS["primary"], marker_line_width=0,
+            text=[f"{v:.1f} GB" for v in top_df["flux_gb"]],
+            textposition="outside",
+            textfont={"size": 11, "color": COLORS["text_secondary"]},
+            hovertemplate="<b>%{y}</b><br>流量: %{x:.2f} GB<extra></extra>"
+        ))
+        top_fig = apply_chart_style(top_fig, "域名流量排行 Top 10")
+        top_fig.update_layout(showlegend=False, margin={"l": 140})
+    else:
+        top_fig = {}
+
+    # HTTP 状态码
+    http_totals = {
+        "2xx": int(meta.get("c2") or 0),
+        "3xx": int(meta.get("c3") or 0),
+        "4xx": int(meta.get("c4") or 0),
+        "5xx": int(meta.get("c5") or 0),
+    }
+    http_fig = go.Figure(data=[go.Pie(
+        labels=list(http_totals.keys()), values=list(http_totals.values()),
+        hole=0.6,
+        marker_colors=[HTTP_COLORS[k] for k in http_totals.keys()],
+        textinfo="percent",
+        textfont={"size": 12, "color": "#ffffff"},
+        hovertemplate="<b>%{label}</b><br>%{value:,} 次<br>%{percent}<extra></extra>"
+    )])
+    http_fig = apply_chart_style(http_fig, "HTTP 状态码分布")
+    http_fig.update_layout(showlegend=True, legend={"orientation": "v", "x": 1, "y": 0.5})
+
+    # 每日明细表
+    daily_rows = []
+    for r in daily:
+        rf = (r["flux"] or 0)
+        rr = (r["req"] or 0)
+        rh = (r["hit"] or 0)
+        rbs = (r["bs_num"] or 0)
+        rbsf = (r["bs_fail"] or 0)
+        daily_rows.append({
+            "date": r["d"],
+            "flux_gb": rf / (1024 ** 3),
+            "req_m": rr / 1e6,
+            "hit_rate": (rh / rr * 100) if rr > 0 else 0,
+            "peak_gbps": (r["peak_bps"] or 0) / 1e9,
+            "avail": ((1 - rbsf / rbs) * 100) if rbs > 0 else 100.0,
+        })
+    daily_table = _simple_table(
+        columns=[
+            {"name": "日期", "id": "date"},
+            {"name": "流量 (GB)", "id": "flux_gb", "type": "numeric", "format": {"specifier": ",.2f"}},
+            {"name": "请求 (M)", "id": "req_m", "type": "numeric", "format": {"specifier": ",.2f"}},
+            {"name": "命中率 (%)", "id": "hit_rate", "type": "numeric", "format": {"specifier": ".2f"}},
+            {"name": "峰值带宽 (Gbps)", "id": "peak_gbps", "type": "numeric", "format": {"specifier": ".2f"}},
+            {"name": "可用率 (%)", "id": "avail", "type": "numeric", "format": {"specifier": ".2f"}},
+        ],
+        data=daily_rows,
+        page_size=31,
+    )
+
+    # 报告标题区
+    report_title = html.Div([
+        html.Div(f"{month_str} 月度 CDN 流量报告",
+                 style={"fontSize": "24px", "fontWeight": "700", "color": "#0f172a"}),
+        html.Div(f"项目: {project_label} · 涵盖 {len(daily)} 天 · {domain_count} 个域名 · "
+                 f"生成时间 {datetime.now(tz=LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}",
+                 style={"fontSize": "13px", "color": "#64748b", "marginTop": "6px"}),
+    ], style={"marginBottom": "20px", "paddingBottom": "16px",
+              "borderBottom": "2px solid #e2e8f0"})
 
     return html.Div([
-        create_page_header("实时监控", "实时请求流与核心指标"),
-        html.Div([qps_card, latency_card, bw_card], className="chart-row",
-                 style={"gridTemplateColumns": "repeat(3, 1fr)"}),
-        stream_card,
+        report_title,
+        summary,
+        html.Div([
+            dcc.Graph(figure=trend_fig, config={"displayModeBar": False})
+        ], className="chart-card"),
+        html.Div([
+            html.Div([
+                dcc.Graph(figure=top_fig, config={"displayModeBar": False}) if top_fig else html.Div("无数据")
+            ], className="chart-card"),
+            html.Div([
+                dcc.Graph(figure=http_fig, config={"displayModeBar": False})
+            ], className="chart-card"),
+        ], className="chart-row"),
+        html.Div([
+            html.H3("每日明细"),
+            daily_table,
+        ], className="chart-card"),
+    ])
+
+
+def create_report_page(storage, projects):
+    """月度报告页面"""
+    months = _list_available_months(storage)
+    default_month = months[0] if months else None
+
+    toolbar = html.Div([
+        html.Span("月份", className="filter-label"),
+        dcc.Dropdown(
+            id="report-month-filter",
+            options=[{"label": m, "value": m} for m in months],
+            value=default_month,
+            style={"width": "160px"},
+            clearable=False,
+        ),
+        html.Span("项目", className="filter-label", style={"marginLeft": "20px"}),
+        dcc.Dropdown(
+            id="report-project-filter",
+            options=[{"label": "全部项目", "value": "all"}] +
+                    [{"label": p, "value": p} for p in projects],
+            value="all",
+            style={"width": "200px"},
+            clearable=False,
+        ),
+        html.Div(className="time-range-spacer"),
+        html.Button([
+            html.Span("picture_as_pdf", className="material-symbols-outlined",
+                      style={"fontSize": "18px", "marginRight": "6px", "verticalAlign": "middle"}),
+            "导出 PDF",
+        ], id="report-export-btn", className="btn-primary",
+            style={"display": "inline-flex", "alignItems": "center"},
+            n_clicks=0),
+    ], className="time-range-bar", style={"alignItems": "center"}, id="report-toolbar")
+
+    initial = _build_report_content(storage, default_month, "all")
+
+    return html.Div([
+        create_page_header("月度报告", "按月汇总 CDN 流量指标，支持导出为 PDF"),
+        toolbar,
+        html.Div(initial, id="report-content"),
+        # 客户端回调触发打印
+        html.Div(id="report-print-dummy", style={"display": "none"}),
     ])
 
 
@@ -2805,6 +3032,31 @@ def create_app(data_file=None):
             cls("overview-range-month"),
         )
 
+    # 月度报告：月/项目 → 刷新报告内容
+    @app.callback(
+        Output("report-content", "children"),
+        [
+            Input("report-month-filter", "value"),
+            Input("report-project-filter", "value"),
+        ],
+        prevent_initial_call=True,
+    )
+    def refresh_report(month_str, project_val):
+        return _build_report_content(storage, month_str, project_val)
+
+    # 月度报告：客户端触发浏览器打印（另存为 PDF）
+    app.clientside_callback(
+        """
+        function(n) {
+            if (n && n > 0) { setTimeout(function(){ window.print(); }, 100); }
+            return "";
+        }
+        """,
+        Output("report-print-dummy", "children"),
+        Input("report-export-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
     # 路由回调：根据 URL 分发页面
     @app.callback(
         [
@@ -2822,6 +3074,7 @@ def create_app(data_file=None):
         page_map = {
             "/overview": lambda: create_overview_page(storage),
             "/analytics": lambda: create_analytics_page(default_start_iso, default_end_iso, domains, projects),
+            "/report": lambda: create_report_page(storage, projects),
             "/domains": lambda: create_domains_page(storage.get_domain_project_pairs(), projects),
             "/dns": lambda: create_dns_page(domains),
             "/cache": lambda: create_cache_page(),
@@ -2831,7 +3084,6 @@ def create_app(data_file=None):
             "/speed": lambda: create_speed_page(),
             "/rules": lambda: create_rules_page(),
             "/loadbalancer": lambda: create_loadbalancer_page(),
-            "/monitor": lambda: create_monitor_page(),
         }
         page_fn = page_map.get(pathname)
         if page_fn is None:
