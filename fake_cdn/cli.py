@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Fake CDN CLI - 基于总流量 + 时间窗口生成 CDN 推送日志。"""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -232,7 +232,7 @@ def mode_validate(config: Dict, args) -> None:
 def mode_dashboard(config: Dict, args) -> None:
     from fake_cdn.dashboard.app import run_dashboard
 
-    run_dashboard(port=args.port or 8050)
+    run_dashboard(port=args.port or 8050, config_path=args.config)
 
 
 def mode_migrate(config: Dict, args) -> None:

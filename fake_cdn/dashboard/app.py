@@ -25,7 +25,13 @@ from plotly.subplots import make_subplots
 import pandas as pd
 from flask import session, redirect, request, Response
 
+from ..core.config_manager import ConfigManager
 from ..core.storage import CDNLogStorage, get_default_storage
+from .config_page import (
+    create_config_audit_page,
+    create_config_page,
+    register_config_callbacks,
+)
 
 
 # ============================================================================
@@ -1303,6 +1309,8 @@ PAGE_TITLES = {
     "/overview": "概览",
     "/analytics": "流量分析",
     "/report": "月度报告",
+    "/config": "配置管理",
+    "/config-audit": "审计日志",
     "/domains": "域名管理",
     "/dns": "DNS 记录",
     "/cache": "缓存",
@@ -1343,8 +1351,13 @@ def create_sidebar(current_path="/overview"):
         nav_item("language", "域名管理", "/domains"),
         nav_item("dns", "DNS 记录", "/dns"),
 
-        # 配置
-        html.Div("配置", className="sidebar-section"),
+        # 配置中心
+        html.Div("配置中心", className="sidebar-section"),
+        nav_item("assignment", "配置管理", "/config"),
+        nav_item("history", "审计日志", "/config-audit"),
+
+        # CDN 功能配置
+        html.Div("CDN 功能", className="sidebar-section"),
         nav_item("cached", "缓存", "/cache"),
         nav_item("shield", "安全防护", "/security"),
         nav_item("lock", "SSL/TLS", "/ssl"),
@@ -1778,6 +1791,7 @@ def create_overview_page(storage):
 def create_analytics_page(default_start_iso, default_end_iso, domains, projects=None):
     """流量分析页（保留现有功能）"""
     return html.Div([
+        dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
         create_page_header("流量分析", "带宽、请求、缓存与回源详细指标"),
         create_time_controls(default_start_iso, default_end_iso, domains, projects),
         html.Div(id="summary-cards"),
@@ -2546,10 +2560,16 @@ def create_report_page(storage, projects):
     ])
 
 
-def create_app(data_file=None):
+def create_app(data_file=None, config_path=None):
     """创建 Dash 应用"""
     # 获取 SQLite 存储
     storage = get_storage()
+    resolved_config_path = Path(
+        config_path
+        or os.environ.get("FAKE_CDN_CONFIG_PATH")
+        or Path.cwd() / "config.json"
+    )
+    config_manager = ConfigManager(resolved_config_path)
 
     # 获取数据范围（默认时间窗口与概览页"周"对齐：以 _resolve_end_time_ms 为锚向前 7 天）
     default_start, default_end = get_default_date_range(storage)
@@ -2640,8 +2660,6 @@ def create_app(data_file=None):
     app.layout = html.Div([
         # URL 路由
         dcc.Location(id="url", refresh=False),
-        # 隐藏组件
-        dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
 
         # 侧边栏容器（由路由回调重新渲染以同步 active 态）
         html.Div(create_sidebar("/overview"), id="sidebar-container"),
@@ -2659,6 +2677,9 @@ def create_app(data_file=None):
             ),
         ], className="main-area"),
     ], className="app-shell")
+
+    # 配置管理页面回调独立注册，避免继续膨胀主数据回调。
+    register_config_callbacks(app, config_manager)
 
     # 注册回调 - 主数据更新
     @app.callback(
@@ -3075,6 +3096,8 @@ def create_app(data_file=None):
             "/overview": lambda: create_overview_page(storage),
             "/analytics": lambda: create_analytics_page(default_start_iso, default_end_iso, domains, projects),
             "/report": lambda: create_report_page(storage, projects),
+            "/config": lambda: create_config_page(config_manager),
+            "/config-audit": lambda: create_config_audit_page(config_manager),
             "/domains": lambda: create_domains_page(storage.get_domain_project_pairs(), projects),
             "/dns": lambda: create_dns_page(domains),
             "/cache": lambda: create_cache_page(),
@@ -3100,9 +3123,9 @@ def create_app(data_file=None):
     return app
 
 
-def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None):
+def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None, config_path=None):
     """运行仪表板"""
-    app = create_app(data_file)
+    app = create_app(data_file, config_path=config_path)
 
     # 获取存储信息
     storage = get_storage()
