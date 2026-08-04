@@ -121,13 +121,17 @@ python -m fake_cdn dashboard --config ./config.json --port 8050
 4. 在 `output/config-management/audit.jsonl` 记录操作者和版本变化。
 
 配置保存不会自动生成数据或调用 CDN API。即使保存了推送模式，实际执行时仍需
-通过 CLI 的安全确认。对外提供仪表板时，建议至少设置：
+通过 CLI 的安全确认。对外提供仪表板时，可使用现有的单管理员登录，不需要额外
+角色系统：
 
 ```bash
 export DASHBOARD_USERNAME=admin
 export DASHBOARD_PASSWORD=<strong-password>
 export DASHBOARD_SECRET_KEY=<stable-random-secret>
 ```
+
+启用后，页面路由以及 Dash 布局、依赖和回调接口都会验证管理员登录态，配置保存
+接口不能在未登录状态下直接调用。未设置 `DASHBOARD_PASSWORD` 时仅适合本地开发。
 
 ---
 

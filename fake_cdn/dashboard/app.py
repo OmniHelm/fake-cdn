@@ -82,6 +82,13 @@ def verify_password(username: str, password: str) -> bool:
             return True
     return False
 
+
+def is_public_auth_path(path: str) -> bool:
+    """认证启用时仍允许匿名访问的登录页和静态资源。"""
+    public_paths = {"/login", "/logout", "/favicon.ico", "/_favicon.ico"}
+    return path in public_paths or path.startswith(("/assets/", "/_dash-component-suites/"))
+
+
 # ============================================================================
 # 专业配色方案 (参考 Stripe/Linear 设计规范)
 # ============================================================================
@@ -2647,13 +2654,14 @@ def create_app(data_file=None, config_path=None):
         if not auth_config["enabled"]:
             return None
 
-        # 排除静态资源和登录页面
+        # 登录页和静态资源保持公开；布局、依赖和回调接口必须校验登录态。
         path = request.path
-        if path in ["/login", "/logout"] or path.startswith("/_dash") or path.startswith("/assets"):
+        if is_public_auth_path(path):
             return None
 
-        # 检查是否已登录
         if not session.get("authenticated"):
+            if path.startswith("/_dash"):
+                return Response("Unauthorized", status=401)
             return redirect("/login")
 
     # 布局
