@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from fake_cdn.core.config_manager import ConfigManagerError
 from fake_cdn.core.generator import (
     CDNLogGenerator,
     TimeWindowBuilder,
@@ -26,6 +27,7 @@ from fake_cdn.core.generator import (
 from fake_cdn.core.pusher import LocalSaver, LogPusher
 from fake_cdn.core.scheduler import CatchupScheduler, RealtimeScheduler
 from fake_cdn.core.storage import get_default_storage
+from fake_cdn.core.tenant_config import TenantConfigStore, get_default_config_store
 from fake_cdn.core.validator import (
     BillingCalculator,
     FluxWindowValidator,
@@ -44,21 +46,67 @@ def load_config(config_path: str = "./config.json") -> Dict:
         print(f"[错误] 配置文件格式错误: {exc}")
         sys.exit(1)
 
+    try:
+        return apply_api_environment(config)
+    except ValueError as exc:
+        print(f"[错误] 配置校验失败: {exc}")
+        sys.exit(1)
+
+
+def apply_api_environment(config: Dict) -> Dict:
+    """在运行时覆盖敏感 API 参数，数据库中不持久化环境变量值。"""
+    config = deepcopy(config)
     if os.environ.get("CDN_API_ENDPOINT"):
         config.setdefault("api", {}).setdefault("headers", {})
         config["api"]["endpoint"] = os.environ["CDN_API_ENDPOINT"]
         print(f"[环境变量] API endpoint: {config['api']['endpoint']}")
-
     if os.environ.get("CDN_API_VIP"):
         config.setdefault("api", {}).setdefault("headers", {})
         config["api"]["headers"]["vip"] = os.environ["CDN_API_VIP"]
         print(f"[环境变量] API vip: {config['api']['headers']['vip']}")
+    return normalize_config(config)
 
-    try:
-        return normalize_config(config)
-    except ValueError as exc:
-        print(f"[错误] 配置校验失败: {exc}")
-        sys.exit(1)
+
+def load_tenant_config(args) -> Tuple[Dict, Optional[TenantConfigStore], Optional[str]]:
+    """优先从租户配置库读取已发布版本；未指定租户时保留文件兼容模式。"""
+    if not args.tenant_id:
+        print("[兼容模式] 未指定 --tenant-id，继续读取 config.json；建议迁移到配置数据库")
+        return load_config(args.config), None, None
+
+    store = TenantConfigStore(args.config_db) if args.config_db else get_default_config_store()
+    store.bootstrap([args.config])
+    snapshot = store.resolve_active(args.tenant_id)
+    config = apply_api_environment(snapshot["config"])
+    if args.mode not in {"simulation", "realtime", "catchup"}:
+        config["_runtime"] = {
+            "tenant_id": args.tenant_id,
+            "config_version_id": snapshot["id"],
+            "config_checksum": snapshot["checksum"],
+        }
+        return config, store, None
+
+    job = store.create_job(
+        args.tenant_id,
+        snapshot["id"],
+        args.mode,
+        config.get("mode", {}).get("output_dir", "./output"),
+    )
+    config.setdefault("mode", {})["output_dir"] = job["output_dir"]
+    central_log_db = os.environ.get("FAKE_CDN_DB_PATH") or str(
+        Path(__file__).resolve().parent.parent / "output" / "cdn_logs.db"
+    )
+    config["_runtime"] = {
+        "tenant_id": args.tenant_id,
+        "config_version_id": snapshot["id"],
+        "config_checksum": snapshot["checksum"],
+        "generation_job_id": job["job_id"],
+        "log_db_path": central_log_db,
+    }
+    print(
+        f"[租户配置] {args.tenant_id} · v{snapshot['version_no']} · "
+        f"{snapshot['checksum'][:12]} · {job['job_id']}"
+    )
+    return config, store, job["job_id"]
 
 
 def build_config_summary(config: Dict) -> Dict:
@@ -134,7 +182,11 @@ def mode_simulation(config: Dict, args) -> None:
 
     if config["mode"].get("save_local", True):
         output_dir = get_output_dir(config)
-        LocalSaver.save_logs(logs, output_dir)
+        LocalSaver.save_logs(
+            logs,
+            output_dir,
+            db_path=config.get("_runtime", {}).get("log_db_path"),
+        )
         LocalSaver.save_stats(stats, output_dir, "stats.json")
         LocalSaver.save_flux_curve(plan, output_dir, "flux_curve.csv", config["time"]["interval_seconds"])
 
@@ -232,7 +284,51 @@ def mode_validate(config: Dict, args) -> None:
 def mode_dashboard(config: Dict, args) -> None:
     from fake_cdn.dashboard.app import run_dashboard
 
-    run_dashboard(port=args.port or 8050, config_path=args.config)
+    run_dashboard(
+        port=args.port or 8050,
+        config_path=args.config,
+        config_db_path=args.config_db,
+    )
+
+
+def mode_tenant_migrate(args) -> None:
+    """显式导入 config*.json，并报告日志库中未配置的租户。"""
+    store = TenantConfigStore(args.config_db) if args.config_db else get_default_config_store()
+    root = Path(args.config).expanduser().resolve().parent
+    candidates = sorted(root.glob("config*.json"))
+    imported_count = 0
+    failed_count = 0
+    for candidate in candidates:
+        try:
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
+            tenant_id = store.validate(raw)["dimensions"]["tenant_id"]
+            existed = store.tenant_exists(tenant_id)
+            store.import_config_file(candidate)
+            if existed:
+                print(f"[跳过] {candidate.name}: {tenant_id} 已存在")
+            else:
+                imported_count += 1
+                print(f"[导入] {candidate.name}: {tenant_id}")
+        except (OSError, json.JSONDecodeError, ConfigManagerError) as exc:
+            failed_count += 1
+            print(f"[失败] {candidate.name}: {exc}")
+    print(f"[配置库] {store.db_path}")
+    print(
+        f"[扫描] {len(candidates)} 个配置文件，新导入 {imported_count} 个租户，"
+        f"失败 {failed_count} 个"
+    )
+    configured = {item["tenant_id"] for item in store.list_tenants()}
+    log_tenants = set(get_default_storage().get_tenants())
+    missing = sorted(log_tenants - configured)
+    if missing:
+        print("[待映射] 以下历史日志 tenant_id 尚无配置，系统不会自动合并：")
+        for tenant_id in missing:
+            print(f"  - {tenant_id}")
+    for item in store.list_tenants():
+        print(
+            f"  {item['tenant_id']} · active=v{item.get('active_version_no') or '—'} "
+            f"· versions={item['version_count']}"
+        )
 
 
 def mode_migrate(config: Dict, args) -> None:
@@ -304,6 +400,7 @@ def main() -> None:
   validate      校验已生成日志
   dashboard     启动可视化仪表板
   migrate       将 JSONL 数据导入 SQLite
+  tenant-migrate 将 config*.json 显式导入租户配置数据库
 
 示例:
   python -m fake_cdn simulation
@@ -317,10 +414,15 @@ def main() -> None:
         "mode",
         nargs="?",
         default="simulation",
-        choices=["simulation", "realtime", "catchup", "validate", "dashboard", "migrate"],
+        choices=[
+            "simulation", "realtime", "catchup", "validate", "dashboard", "migrate",
+            "tenant-migrate",
+        ],
         help="运行模式",
     )
     parser.add_argument("--config", default="./config.json", help="配置文件路径 (默认: ./config.json)")
+    parser.add_argument("--tenant-id", help="从配置数据库加载该租户的已发布版本")
+    parser.add_argument("--config-db", help="租户配置 SQLite 路径（默认: output/config.db）")
     parser.add_argument("--once", action="store_true", help="实时模式下只执行一次")
     parser.add_argument("--start-datetime", help="补推模式: 开始时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)")
     parser.add_argument("--end-datetime", help="补推/实时模式: 结束时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)")
@@ -341,8 +443,11 @@ def main() -> None:
     if args.mode == "migrate":
         mode_migrate({}, args)
         return
+    if args.mode == "tenant-migrate":
+        mode_tenant_migrate(args)
+        return
 
-    config = load_config(args.config)
+    config, config_store, job_id = load_tenant_config(args)
     if args.dry_run:
         config = deepcopy(config)
         config["mode"]["dry_run"] = True
@@ -359,10 +464,16 @@ def main() -> None:
             mode_catchup(config, args)
         elif args.mode == "validate":
             mode_validate(config, args)
+        if config_store and job_id:
+            config_store.finish_job(job_id, "succeeded")
     except KeyboardInterrupt:
+        if config_store and job_id:
+            config_store.finish_job(job_id, "cancelled")
         print("\n\n[中断] 用户中断执行")
         sys.exit(0)
     except Exception as exc:
+        if config_store and job_id:
+            config_store.finish_job(job_id, "failed", {"error": str(exc)})
         print(f"\n[错误] {exc}")
         import traceback
 

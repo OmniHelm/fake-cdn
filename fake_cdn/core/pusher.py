@@ -1,12 +1,12 @@
-from __future__ import annotations
-
 """日志推送与本地保存。"""
+
+from __future__ import annotations
 
 import json
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -161,10 +161,21 @@ class LocalSaver:
         return cls._storage_instances[db_path]
 
     @staticmethod
-    def save_logs(logs: Sequence[Dict], output_dir: str, filename: str = "cdn_logs.db") -> None:
+    def save_logs(
+        logs: Sequence[Dict],
+        output_dir: str,
+        filename: str = "cdn_logs.db",
+        db_path: Optional[str] = None,
+    ) -> None:
         del filename  # 统一使用 SQLite，保留参数仅为兼容调用方签名。
         os.makedirs(output_dir, exist_ok=True)
-        storage = LocalSaver.get_storage(output_dir)
+        if db_path:
+            resolved = os.path.abspath(db_path)
+            if resolved not in LocalSaver._storage_instances:
+                LocalSaver._storage_instances[resolved] = CDNLogStorage(resolved)
+            storage = LocalSaver._storage_instances[resolved]
+        else:
+            storage = LocalSaver.get_storage(output_dir)
         storage.insert_logs(list(logs))
 
     @staticmethod

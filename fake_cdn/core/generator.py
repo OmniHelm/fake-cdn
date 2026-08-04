@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 CDN 日志生成器 - 流量窗口驱动模型
 
@@ -9,6 +7,8 @@ CDN 日志生成器 - 流量窗口驱动模型
 3. 最后从 flux 反推 bw / req / hit / bs / http_code 等指标
 """
 
+from __future__ import annotations
+
 import calendar
 import copy
 import hashlib
@@ -17,8 +17,8 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from typing import Dict, List, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - Python 3.9+
     from zoneinfo import ZoneInfo
@@ -864,6 +864,7 @@ class CDNLogGenerator:
         interval_seconds = self.config["time"]["interval_seconds"]
         timezone = parse_timezone(self.config["time"]["timezone"])
         slot_dt = datetime.fromtimestamp(plan_point.timestamp_ms / 1000, tz=timezone)
+        runtime = self.config.get("_runtime", {})
 
         for item in distributed_fluxes:
             rng_seed = stable_seed(
@@ -888,6 +889,8 @@ class CDNLogGenerator:
                     "project": self.config["dimensions"].get("project")
                         or self.config["dimensions"].get("tenant_id")
                         or "默认",
+                    "configVersionId": runtime.get("config_version_id"),
+                    "generationJobId": runtime.get("generation_job_id"),
                     "start_time": plan_point.timestamp_ms,
                     "country": item["country"],
                     "region": item["region"],
@@ -903,7 +906,7 @@ class CDNLogGenerator:
     def generate_window_logs(self) -> Tuple[List[Dict], Dict]:
         plan = self.generate_window_plan()
         print(f"[生成] 时间点数量: {len(plan)}")
-        print(f"[生成] 开始生成日志...")
+        print("[生成] 开始生成日志...")
 
         logs: List[Dict] = []
         for index, plan_point in enumerate(plan, start=1):

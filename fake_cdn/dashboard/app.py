@@ -9,29 +9,36 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-try:
-    from zoneinfo import ZoneInfo
-    LOCAL_TZ = ZoneInfo("Asia/Shanghai")
-except ImportError:
-    # Python 3.8 fallback
-    LOCAL_TZ = timezone(timedelta(hours=8))
+from urllib.parse import unquote
 
 import dash
-from dash import dcc, html, dash_table
-from dash.dependencies import Input, Output
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
-from flask import session, redirect, request, Response
+import plotly.graph_objects as go
+from dash import dash_table, dcc, html
+from dash.dependencies import Input, Output, State
+from flask import Response, redirect, request, session
+from plotly.subplots import make_subplots
 
-from ..core.config_manager import ConfigManager
 from ..core.storage import CDNLogStorage, get_default_storage
+from ..core.tenant_config import TenantConfigStore, get_default_config_store
 from .config_page import (
     create_config_audit_page,
     create_config_page,
     register_config_callbacks,
 )
+from .tenant_admin import (
+    create_tenant_list_page,
+    create_version_panel,
+    register_tenant_callbacks,
+)
+
+try:
+    from zoneinfo import ZoneInfo
+
+    LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+except ImportError:
+    # Python 3.8 fallback
+    LOCAL_TZ = timezone(timedelta(hours=8))
 
 
 # ============================================================================
@@ -61,7 +68,7 @@ def get_auth_config():
             if isinstance(parsed, dict):
                 users.update(parsed)
         except json.JSONDecodeError:
-            print(f"[警告] DASHBOARD_USERS 格式错误，应为 JSON 对象")
+            print("[警告] DASHBOARD_USERS 格式错误，应为 JSON 对象")
 
     return {
         "enabled": bool(users),
@@ -151,6 +158,7 @@ def get_storage() -> CDNLogStorage:
 
 def load_data_from_sqlite(
     storage: CDNLogStorage,
+    tenant_id: str,
     start_time: int = None,
     end_time: int = None,
     domain: str = None
@@ -159,14 +167,17 @@ def load_data_from_sqlite(
     return storage.query_logs(
         start_time=start_time,
         end_time=end_time,
-        domain=domain if domain != "all" else None
+        domain=domain if domain != "all" else None,
+        tenant_id=tenant_id,
     )
 
 
-def _build_where(start_time, end_time, domain, project):
-    """构造所有 analytics SQL 共用的 WHERE 子句，保证三页过滤口径一致"""
-    where = ["interval > 0"]
-    params: list = []
+def _build_where(tenant_id, start_time=None, end_time=None, domain=None, project=None):
+    """构造租户内 SQL 条件；tenant_id 缺失时拒绝查询，避免跨租户泄漏。"""
+    if not tenant_id:
+        raise ValueError("tenant_id 是数据查询的必填隔离条件")
+    where = ["tenant_id = ?", "interval > 0"]
+    params: list = [tenant_id]
     if start_time:
         where.append("start_time >= ?")
         params.append(start_time)
@@ -182,9 +193,9 @@ def _build_where(start_time, end_time, domain, project):
     return " AND ".join(where), params
 
 
-def _load_aggregate_meta(storage, start_time=None, end_time=None, domain=None, project=None):
+def _load_aggregate_meta(storage, tenant_id, start_time=None, end_time=None, domain=None, project=None):
     """单条 SQL 返回时段+过滤条件下的全部聚合指标，供概览与分析页共享"""
-    where_sql, params = _build_where(start_time, end_time, domain, project)
+    where_sql, params = _build_where(tenant_id, start_time, end_time, domain, project)
     with storage._get_conn() as conn:
         row = conn.execute(
             f"""
@@ -211,9 +222,9 @@ def _load_aggregate_meta(storage, start_time=None, end_time=None, domain=None, p
     return dict(row) if row else {}
 
 
-def _load_peak_bps(storage, start_time=None, end_time=None, domain=None, project=None):
+def _load_peak_bps(storage, tenant_id, start_time=None, end_time=None, domain=None, project=None):
     """峰值带宽（bps）：按 start_time 分组求瞬时总带宽，取最大"""
-    where_sql, params = _build_where(start_time, end_time, domain, project)
+    where_sql, params = _build_where(tenant_id, start_time, end_time, domain, project)
     with storage._get_conn() as conn:
         row = conn.execute(
             f"""
@@ -228,9 +239,9 @@ def _load_peak_bps(storage, start_time=None, end_time=None, domain=None, project
     return (row["peak_bps"] or 0) if row else 0
 
 
-def _load_daily_stats(storage, start_time=None, end_time=None, domain=None, project=None):
+def _load_daily_stats(storage, tenant_id, start_time=None, end_time=None, domain=None, project=None):
     """按自然日（Asia/Shanghai）聚合：日流量/日请求/日命中率/日峰值带宽"""
-    where_sql, params = _build_where(start_time, end_time, domain, project)
+    where_sql, params = _build_where(tenant_id, start_time, end_time, domain, project)
     # SQLite 的 date() 支持 unixepoch 转换；+8 hours 对齐 Asia/Shanghai
     with storage._get_conn() as conn:
         rows = conn.execute(
@@ -258,7 +269,7 @@ def _load_daily_stats(storage, start_time=None, end_time=None, domain=None, proj
     return [dict(r) for r in rows]
 
 
-def load_analytics_data(storage, start_time=None, end_time=None, domain=None, project=None):
+def load_analytics_data(storage, tenant_id, start_time=None, end_time=None, domain=None, project=None):
     """SQL 层聚合：一次调用拿到 analytics 页所需的全部数据
 
     只加载已聚合的小结果集，而不是全部原始记录。对百万级数据至关重要。
@@ -268,9 +279,9 @@ def load_analytics_data(storage, start_time=None, end_time=None, domain=None, pr
         domains: Top 10 域名流量排行
         table: 最近 500 条明细
     """
-    where_sql, params = _build_where(start_time, end_time, domain, project)
+    where_sql, params = _build_where(tenant_id, start_time, end_time, domain, project)
     # meta 单独走共享函数（供概览页同步使用，保证计算口径一致）
-    meta = _load_aggregate_meta(storage, start_time, end_time, domain, project)
+    meta = _load_aggregate_meta(storage, tenant_id, start_time, end_time, domain, project)
 
     with storage._get_conn() as conn:
         # 1. 时间点聚合（按 start_time 分组）
@@ -371,27 +382,27 @@ def process_data(records):
     return df
 
 
-def _resolve_end_time_ms(storage):
+def _resolve_end_time_ms(storage, tenant_id):
     """统一的"当前"基准时间：若数据最新时间晚于 1 天前则取现在；否则取 max_time
 
     让概览（日/周/月）和分析页（24h/7d/30d）使用完全相同的时间窗口锚点，
     保证"同一时间段"下三页数字可校验对齐。
     """
     now_ms = int(datetime.now(tz=LOCAL_TZ).timestamp() * 1000)
-    _, max_time = storage.get_time_range()
+    _, max_time = storage.get_time_range(tenant_id=tenant_id)
     if max_time and (now_ms - max_time) > 86400 * 1000:
         return max_time
     return now_ms
 
 
-def get_default_date_range(storage: CDNLogStorage):
+def get_default_date_range(storage: CDNLogStorage, tenant_id: str):
     """获取默认日期范围：以统一基准时间向前推 7 天，对齐概览默认"周" """
-    min_time, max_time = storage.get_time_range()
+    min_time, max_time = storage.get_time_range(tenant_id=tenant_id)
     if min_time is None or max_time is None:
         now = datetime.now(tz=LOCAL_TZ)
         return now.date(), now.date()
 
-    end_ms = _resolve_end_time_ms(storage)
+    end_ms = _resolve_end_time_ms(storage, tenant_id)
     end_dt = datetime.fromtimestamp(end_ms / 1000, tz=LOCAL_TZ)
     start_dt = end_dt - timedelta(days=7)
     return start_dt.date(), end_dt.date()
@@ -414,7 +425,6 @@ def create_metric_card(title, value, subtitle=None, color=None, trend=None):
 
 def create_summary_cards(df):
     """创建汇总卡片"""
-    import numpy as np
 
     # 按时间点聚合后计算带宽指标
     time_agg = df.groupby("batch").agg({"bw_mbps": "sum", "timestamp": "first"})
@@ -1153,6 +1163,34 @@ INDEX_STRING = '''
                 color: #334155;
             }
 
+            /* 租户是全站数据边界，顶栏持续展示当前上下文。 */
+            .tenant-context { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 3px solid #38bdf8; }
+            .tenant-context-label { color: #64748b; font: 700 9px/1 'SF Mono', Monaco, monospace; letter-spacing: .12em; }
+            .tenant-switcher { width: 190px; font-size: 12px; }
+            .tenant-admin-page, .tenant-version-card { --config-blue: #0ea5e9; --config-blue-dark: #0284c7; }
+            .tenant-admin-page { display: flex; flex-direction: column; gap: 20px; }
+            .tenant-count, .tenant-meta { color: #64748b; font-size: 12px; }
+            .tenant-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+            .tenant-card, .tenant-create-card, .tenant-version-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; }
+            .tenant-card { display: flex; flex-direction: column; gap: 18px; border-top: 3px solid #0ea5e9; }
+            .tenant-card-identity, .tenant-card-meta, .tenant-card-actions, .tenant-create-form, .tenant-version-heading, .tenant-version-actions { display: flex; align-items: center; gap: 12px; }
+            .tenant-card-identity h3 { margin: 0 0 4px; }
+            .tenant-card-identity code { color: #475569; font-size: 12px; }
+            .tenant-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; background: #e0f2fe; color: #0369a1; font-weight: 800; }
+            .tenant-card-meta { flex-wrap: wrap; }
+            .tenant-card-actions { margin-top: auto; }
+            .tenant-card-actions a { text-decoration: none; }
+            .tenant-create-heading h3, .tenant-version-heading h3 { margin: 0 0 4px; }
+            .tenant-create-heading p, .tenant-version-heading p { margin: 0 0 16px; color: #64748b; font-size: 13px; }
+            .tenant-create-form > * { flex: 1; min-width: 160px; }
+            .tenant-version-heading { justify-content: space-between; }
+            .tenant-version-actions .config-dropdown { min-width: 360px; }
+            @media (max-width: 900px) {
+                .tenant-context-label { display: none; }
+                .tenant-switcher { width: 145px; }
+                .tenant-create-form { align-items: stretch; flex-direction: column; }
+            }
+
             /* ===== 打印样式（导出 PDF 专用） ===== */
             @media print {
                 body, .app-shell, .main-area { height: auto !important; overflow: visible !important; }
@@ -1330,19 +1368,20 @@ PAGE_TITLES = {
 }
 
 
-def create_sidebar(current_path="/overview"):
+def create_sidebar(current_path="/overview", tenant_id=None):
     """创建侧边栏导航，current_path 决定 active 项"""
     # 归一化 /
     if current_path in ("/", ""):
         current_path = "/overview"
 
     def nav_item(icon, label, href):
-        active = (current_path == href)
+        resolved_href = f"/tenants/{tenant_id}{href}" if tenant_id and href not in {"/config", "/config-audit"} else href
+        active = current_path == resolved_href or current_path == href
         cls = "sidebar-item active" if active else "sidebar-item"
         return dcc.Link([
             html.Span(icon, className="material-symbols-outlined"),
             html.Span(label),
-        ], href=href, className=cls, refresh=False)
+        ], href=resolved_href, className=cls, refresh=False)
 
     return html.Div([
         # Logo
@@ -1384,11 +1423,30 @@ def create_sidebar(current_path="/overview"):
     ], className="sidebar")
 
 
-def create_topbar(auth_config, current_path="/overview"):
+def create_topbar(auth_config, current_path="/overview", tenant_id=None, tenants=None):
     """创建顶部信息栏"""
-    page_title = PAGE_TITLES.get(current_path, "概览")
+    page_key = "/" + current_path.rstrip("/").split("/")[-1]
+    page_title = PAGE_TITLES.get(page_key, "租户配置" if "/config/tenants/" in current_path else "概览")
 
     right_items = [
+        html.Div(
+            [
+                html.Span("TENANT", className="tenant-context-label"),
+                dcc.Dropdown(
+                    id="global-tenant-switcher",
+                    options=[
+                        {"label": item.get("display_name") or item["tenant_id"], "value": item["tenant_id"]}
+                        for item in (tenants or [])
+                    ],
+                    value=tenant_id,
+                    clearable=False,
+                    searchable=True,
+                    className="tenant-switcher",
+                    placeholder="选择租户",
+                ),
+            ],
+            className="tenant-context",
+        ),
         html.Div([
             html.Span(className="status-dot green"),
             html.Span("健康"),
@@ -1547,21 +1605,25 @@ OVERVIEW_RANGE_DAYS = {"day": 1, "week": 7, "month": 30}
 OVERVIEW_RANGE_LABELS = {"day": "最近 24 小时", "week": "最近 7 天", "month": "最近 30 天"}
 
 
-def _compute_overview_metrics(storage, range_key="week"):
+def _compute_overview_metrics(storage, tenant_id, range_key="week"):
     """按日/周/月范围计算概览指标；与分析页共用 _load_aggregate_meta / _load_peak_bps
     保证相同时间段下两页数字完全一致。"""
     days = OVERVIEW_RANGE_DAYS.get(range_key, 7)
-    end_ms = _resolve_end_time_ms(storage)
+    end_ms = _resolve_end_time_ms(storage, tenant_id)
     start_ms = end_ms - days * 86400 * 1000
 
-    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    meta = _load_aggregate_meta(
+        storage, tenant_id, start_time=start_ms, end_time=end_ms
+    )
     total_flux_bytes = meta.get("total_flux") or 0
     total_requests = meta.get("total_requests") or 0
     active_domains = meta.get("domain_count") or 0
     total_bs = meta.get("total_bs") or 0
     total_bs_fail = meta.get("total_bs_fail") or 0
 
-    peak_bps = _load_peak_bps(storage, start_time=start_ms, end_time=end_ms)
+    peak_bps = _load_peak_bps(
+        storage, tenant_id, start_time=start_ms, end_time=end_ms
+    )
 
     availability = (1 - total_bs_fail / total_bs) * 100 if total_bs > 0 else None
 
@@ -1601,9 +1663,11 @@ _NODE_CONFIG = [
 ]
 
 
-def _compute_node_cards(storage, start_ms, end_ms):
+def _compute_node_cards(storage, tenant_id, start_ms, end_ms):
     """按查询范围计算各节点的实时带宽和健康状态（分摊模型）"""
-    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    meta = _load_aggregate_meta(
+        storage, tenant_id, start_time=start_ms, end_time=end_ms
+    )
     total_bw_bits = meta.get("total_bw") or 0
     total_req = meta.get("total_requests") or 0
     c5 = meta.get("c5") or 0
@@ -1640,12 +1704,14 @@ def _compute_node_cards(storage, start_ms, end_ms):
     return html.Div(cards, className="node-grid")
 
 
-def _compute_activity_timeline(storage, start_ms, end_ms):
+def _compute_activity_timeline(storage, tenant_id, start_ms, end_ms):
     """基于 SQL 查询生成最近活动时间线（8 条）"""
     now_dt = datetime.now(tz=LOCAL_TZ)
     activities = []
 
-    meta = _load_aggregate_meta(storage, start_time=start_ms, end_time=end_ms)
+    meta = _load_aggregate_meta(
+        storage, tenant_id, start_time=start_ms, end_time=end_ms
+    )
     total_req = meta.get("total_requests") or 0
     total_hits = meta.get("total_hits") or 0
     domain_count = meta.get("domain_count") or 0
@@ -1655,23 +1721,23 @@ def _compute_activity_timeline(storage, start_ms, end_ms):
             # 1. 峰值带宽时刻
             peak_row = conn.execute(
                 "SELECT start_time, SUM(bw * 1.0 / interval) AS bps FROM cdn_logs "
-                "WHERE interval > 0 AND start_time >= ? AND start_time <= ? "
+                "WHERE tenant_id = ? AND interval > 0 AND start_time >= ? AND start_time <= ? "
                 "GROUP BY start_time ORDER BY bps DESC LIMIT 1",
-                (start_ms, end_ms),
+                (tenant_id, start_ms, end_ms),
             ).fetchone()
             # 2. 回源失败最多的域名
             fail_row = conn.execute(
                 "SELECT domain, SUM(bs_fail_num) AS f FROM cdn_logs "
-                "WHERE start_time >= ? AND start_time <= ? "
+                "WHERE tenant_id = ? AND start_time >= ? AND start_time <= ? "
                 "GROUP BY domain ORDER BY f DESC LIMIT 1",
-                (start_ms, end_ms),
+                (tenant_id, start_ms, end_ms),
             ).fetchone()
             # 3. Top 请求域名
             top_req_row = conn.execute(
                 "SELECT domain, SUM(req_num) AS r FROM cdn_logs "
-                "WHERE start_time >= ? AND start_time <= ? "
+                "WHERE tenant_id = ? AND start_time >= ? AND start_time <= ? "
                 "GROUP BY domain ORDER BY r DESC LIMIT 1",
-                (start_ms, end_ms),
+                (tenant_id, start_ms, end_ms),
             ).fetchone()
             # 4. 项目数
             proj_row = conn.execute(
@@ -1753,10 +1819,10 @@ def _build_overview_cards(metrics):
     ], className="metrics-grid")
 
 
-def create_overview_page(storage):
+def create_overview_page(storage, tenant_id):
     """概览页 (带 日/周/月 筛选 + SQL 层实时聚合)"""
     default_range = "week"
-    metrics = _compute_overview_metrics(storage, default_range)
+    metrics = _compute_overview_metrics(storage, tenant_id, default_range)
     cards = _build_overview_cards(metrics)
 
     range_bar = html.Div([
@@ -1772,11 +1838,15 @@ def create_overview_page(storage):
         html.Div(className="time-range-spacer"),
     ], className="time-range-bar")
 
-    node_cards = _compute_node_cards(storage, metrics["start_ms"], metrics["end_ms"])
-    timeline = _compute_activity_timeline(storage, metrics["start_ms"], metrics["end_ms"])
+    node_cards = _compute_node_cards(
+        storage, tenant_id, metrics["start_ms"], metrics["end_ms"]
+    )
+    timeline = _compute_activity_timeline(
+        storage, tenant_id, metrics["start_ms"], metrics["end_ms"]
+    )
 
     return html.Div([
-        create_page_header("概览", "CDN 全局运行状态与关键指标"),
+        create_page_header("概览", f"租户 {tenant_id} 的 CDN 运行状态与关键指标"),
         range_bar,
         html.Div(cards, id="overview-cards"),
         html.Div([
@@ -1936,7 +2006,6 @@ def create_dns_page(domains):
     """DNS 记录页"""
     import random
     random.seed(7)
-    record_types = ["A", "A", "A", "CNAME", "CNAME", "AAAA", "MX", "TXT", "NS"]
     rows = []
     base_domain = sorted(domains)[0] if domains else "example.com"
     # 主域名的典型 DNS 记录
@@ -2317,9 +2386,9 @@ def create_loadbalancer_page():
 # ============================================================================
 # 页面: 月度报告
 # ============================================================================
-def _list_available_months(storage):
+def _list_available_months(storage, tenant_id):
     """返回数据库内覆盖到的月份列表（YYYY-MM 字符串，降序）"""
-    min_time, max_time = storage.get_time_range()
+    min_time, max_time = storage.get_time_range(tenant_id=tenant_id)
     if not min_time or not max_time:
         return []
     start_dt = datetime.fromtimestamp(min_time / 1000, tz=LOCAL_TZ).replace(day=1)
@@ -2348,7 +2417,7 @@ def _month_bounds(month_str):
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
 
-def _build_report_content(storage, month_str, project):
+def _build_report_content(storage, tenant_id, month_str, project):
     """构造月度报告主体（供初始化与回调复用）"""
     if not month_str:
         return html.Div("暂无数据", style={"color": "#94a3b8", "padding": "40px", "textAlign": "center"})
@@ -2356,9 +2425,9 @@ def _build_report_content(storage, month_str, project):
     start_ms, end_ms = _month_bounds(month_str)
     proj = project if project and project != "all" else None
 
-    meta = _load_aggregate_meta(storage, start_ms, end_ms, project=proj)
-    peak_bps = _load_peak_bps(storage, start_ms, end_ms, project=proj)
-    daily = _load_daily_stats(storage, start_ms, end_ms, project=proj)
+    meta = _load_aggregate_meta(storage, tenant_id, start_ms, end_ms, project=proj)
+    peak_bps = _load_peak_bps(storage, tenant_id, start_ms, end_ms, project=proj)
+    daily = _load_daily_stats(storage, tenant_id, start_ms, end_ms, project=proj)
 
     total_flux_tb = (meta.get("total_flux") or 0) / (1024 ** 4)
     total_req = meta.get("total_requests") or 0
@@ -2373,12 +2442,11 @@ def _build_report_content(storage, month_str, project):
     # 日平均 / 日 95 带宽
     if daily:
         daily_peaks_gbps = [(r["peak_bps"] or 0) / 1_000_000_000 for r in daily]
-        daily_avg_gbps = sum(daily_peaks_gbps) / len(daily_peaks_gbps)
         sorted_peaks = sorted(daily_peaks_gbps)
         p95_idx = max(0, min(len(sorted_peaks) - 1, int(len(sorted_peaks) * 0.95) - 1))
         daily_p95_gbps = sorted_peaks[p95_idx]
     else:
-        daily_avg_gbps = daily_p95_gbps = 0
+        daily_p95_gbps = 0
 
     project_label = proj if proj else "全部项目"
 
@@ -2418,7 +2486,7 @@ def _build_report_content(storage, month_str, project):
 
     # 域名 Top 10
     with storage._get_conn() as conn:
-        where_sql, params = _build_where(start_ms, end_ms, None, proj)
+        where_sql, params = _build_where(tenant_id, start_ms, end_ms, None, proj)
         top_rows = conn.execute(
             f"""
             SELECT domain, SUM(flux) AS flux, SUM(req_num) AS req, SUM(hit_num) AS hit
@@ -2523,9 +2591,9 @@ def _build_report_content(storage, month_str, project):
     ])
 
 
-def create_report_page(storage, projects):
+def create_report_page(storage, tenant_id, projects):
     """月度报告页面"""
-    months = _list_available_months(storage)
+    months = _list_available_months(storage, tenant_id)
     default_month = months[0] if months else None
 
     toolbar = html.Div([
@@ -2556,7 +2624,7 @@ def create_report_page(storage, projects):
             n_clicks=0),
     ], className="time-range-bar", style={"alignItems": "center"}, id="report-toolbar")
 
-    initial = _build_report_content(storage, default_month, "all")
+    initial = _build_report_content(storage, tenant_id, default_month, "all")
 
     return html.Div([
         create_page_header("月度报告", "按月汇总 CDN 流量指标，支持导出为 PDF"),
@@ -2567,7 +2635,7 @@ def create_report_page(storage, projects):
     ])
 
 
-def create_app(data_file=None, config_path=None):
+def create_app(data_file=None, config_path=None, config_db_path=None):
     """创建 Dash 应用"""
     # 获取 SQLite 存储
     storage = get_storage()
@@ -2576,30 +2644,20 @@ def create_app(data_file=None, config_path=None):
         or os.environ.get("FAKE_CDN_CONFIG_PATH")
         or Path.cwd() / "config.json"
     )
-    config_manager = ConfigManager(resolved_config_path)
-
-    # 获取数据范围（默认时间窗口与概览页"周"对齐：以 _resolve_end_time_ms 为锚向前 7 天）
-    default_start, default_end = get_default_date_range(storage)
-    min_time, max_time = storage.get_time_range()
-
-    default_end_ms = _resolve_end_time_ms(storage)
-    default_end_dt = datetime.fromtimestamp(default_end_ms / 1000, tz=LOCAL_TZ)
-    default_start_dt = default_end_dt - timedelta(days=7)
-    default_start_iso = default_start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-    default_end_iso = default_end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-
-    # 获取域名列表 + 项目列表
-    domains = storage.get_domains()
-    projects = storage.get_projects()
-
-    # 计算日期范围边界
-    if min_time and max_time:
-        min_date = datetime.fromtimestamp(min_time / 1000).date()
-        # max_date_allowed 设为未来30天，避免限制用户选择
-        max_date = (datetime.now() + timedelta(days=30)).date()
-    else:
-        min_date = default_start
-        max_date = (datetime.now() + timedelta(days=30)).date()
+    config_manager = (
+        TenantConfigStore(config_db_path) if config_db_path else get_default_config_store()
+    )
+    # config.json 仅作为首次导入来源；同名租户不会覆盖，近似名称也不会合并。
+    config_manager.bootstrap(sorted(resolved_config_path.parent.glob("config*.json")))
+    tenant_rows = config_manager.list_tenants()
+    configured_ids = {item["tenant_id"] for item in tenant_rows}
+    log_tenants = storage.get_tenants()
+    default_tenant_id = next(
+        (tenant_id for tenant_id in log_tenants if tenant_id in configured_ids),
+        tenant_rows[0]["tenant_id"] if tenant_rows else None,
+    )
+    if not default_tenant_id:
+        raise RuntimeError("配置数据库中没有租户，请先运行 tenant-migrate")
 
     # 创建 Dash 应用
     app = dash.Dash(__name__, title="CDN Panel", suppress_callback_exceptions=True)
@@ -2668,18 +2726,30 @@ def create_app(data_file=None, config_path=None):
     app.layout = html.Div([
         # URL 路由
         dcc.Location(id="url", refresh=False),
+        dcc.Store(id="tenant-context", data=default_tenant_id),
 
         # 侧边栏容器（由路由回调重新渲染以同步 active 态）
-        html.Div(create_sidebar("/overview"), id="sidebar-container"),
+        html.Div(
+            create_sidebar(f"/tenants/{default_tenant_id}/overview", default_tenant_id),
+            id="sidebar-container",
+        ),
 
         # 主区域
         html.Div([
             # 顶栏容器（由路由回调重新渲染面包屑）
-            html.Div(create_topbar(auth_config, "/overview"), id="topbar-container"),
+            html.Div(
+                create_topbar(
+                    auth_config,
+                    f"/tenants/{default_tenant_id}/overview",
+                    default_tenant_id,
+                    tenant_rows,
+                ),
+                id="topbar-container",
+            ),
 
             # 内容区
             html.Div(
-                create_overview_page(storage),
+                create_overview_page(storage, default_tenant_id),
                 id="page-content",
                 className="content-area",
             ),
@@ -2688,6 +2758,7 @@ def create_app(data_file=None, config_path=None):
 
     # 配置管理页面回调独立注册，避免继续膨胀主数据回调。
     register_config_callbacks(app, config_manager)
+    register_tenant_callbacks(app, config_manager)
 
     # 注册回调 - 主数据更新
     @app.callback(
@@ -2710,10 +2781,13 @@ def create_app(data_file=None, config_path=None):
             Input("end-datetime", "value"),
             Input("domain-filter", "value"),
             Input("project-filter", "value"),
-            Input("refresh-interval", "n_intervals")
-        ]
+            Input("refresh-interval", "n_intervals"),
+        ],
+        [State("tenant-context", "data")],
     )
-    def update_all(start_datetime, end_datetime, selected_domain, selected_project, n_intervals):
+    def update_all(
+        start_datetime, end_datetime, selected_domain, selected_project, n_intervals, tenant_id
+    ):
         """SQL 层聚合 + 构造全部图表（不再加载全量原始记录）"""
         # 解析日期时间字符串，统一按 Asia/Shanghai 时区解释
         def parse_dt(value, end_of_day=False):
@@ -2744,7 +2818,7 @@ def create_app(data_file=None, config_path=None):
             start_time = parse_dt(start_datetime)
             end_time = parse_dt(end_datetime, end_of_day=True)
             data = load_analytics_data(
-                storage, start_time, end_time, selected_domain, selected_project
+                storage, tenant_id, start_time, end_time, selected_domain, selected_project
             )
         except Exception as e:
             print(f"[错误] 加载数据失败: {e}")
@@ -2961,9 +3035,10 @@ def create_app(data_file=None, config_path=None):
             Input("range-30d", "n_clicks"),
             Input("range-custom", "n_clicks"),
         ],
+        [State("tenant-context", "data")],
         prevent_initial_call=True
     )
-    def update_time_range(n_24h, n_7d, n_30d, n_custom):
+    def update_time_range(n_24h, n_7d, n_30d, n_custom, tenant_id):
         ctx = dash.callback_context
         if not ctx.triggered:
             return dash.no_update, dash.no_update, "time-range-btn", "time-range-btn", "time-range-btn active", "time-range-btn"
@@ -2975,7 +3050,7 @@ def create_app(data_file=None, config_path=None):
         classes[btn_map[btn_id]] = base + " active"
 
         # 统一时间基准：与概览页完全一致
-        end_ms = _resolve_end_time_ms(storage)
+        end_ms = _resolve_end_time_ms(storage, tenant_id)
         end_dt = datetime.fromtimestamp(end_ms / 1000, tz=LOCAL_TZ)
         end_val = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -2997,11 +3072,12 @@ def create_app(data_file=None, config_path=None):
             Output("domain-filter", "value"),
         ],
         [Input("project-filter", "value")],
+        [State("tenant-context", "data")],
         prevent_initial_call=True,
     )
-    def filter_domains_by_project(selected_project):
+    def filter_domains_by_project(selected_project, tenant_id):
         proj = selected_project if selected_project and selected_project != "all" else None
-        project_domains = storage.get_domains(project=proj)
+        project_domains = storage.get_domains(project=proj, tenant_id=tenant_id)
         options = [{"label": "全部域名", "value": "all"}] + [
             {"label": d, "value": d} for d in sorted(project_domains)
         ]
@@ -3011,11 +3087,12 @@ def create_app(data_file=None, config_path=None):
     @app.callback(
         Output("domains-table", "data"),
         [Input("domain-project-filter", "value")],
+        [State("tenant-context", "data")],
         prevent_initial_call=True,
     )
-    def refresh_domains_table(selected_project):
+    def refresh_domains_table(selected_project, tenant_id):
         proj = selected_project if selected_project and selected_project != "all" else None
-        pairs = storage.get_domain_project_pairs(project=proj)
+        pairs = storage.get_domain_project_pairs(project=proj, tenant_id=tenant_id)
         return _build_domain_rows(pairs)
 
     # 概览页：日/周/月 范围切换
@@ -3033,9 +3110,10 @@ def create_app(data_file=None, config_path=None):
             Input("overview-range-week", "n_clicks"),
             Input("overview-range-month", "n_clicks"),
         ],
+        [State("tenant-context", "data")],
         prevent_initial_call=True,
     )
-    def update_overview_range(n_d, n_w, n_m):
+    def update_overview_range(n_d, n_w, n_m, tenant_id):
         ctx = dash.callback_context
         btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "overview-range-week"
         key_map = {
@@ -3044,10 +3122,14 @@ def create_app(data_file=None, config_path=None):
             "overview-range-month": "month",
         }
         range_key = key_map.get(btn, "week")
-        metrics = _compute_overview_metrics(storage, range_key)
+        metrics = _compute_overview_metrics(storage, tenant_id, range_key)
         cards = _build_overview_cards(metrics)
-        nodes_html = _compute_node_cards(storage, metrics["start_ms"], metrics["end_ms"])
-        timeline_html = _compute_activity_timeline(storage, metrics["start_ms"], metrics["end_ms"])
+        nodes_html = _compute_node_cards(
+            storage, tenant_id, metrics["start_ms"], metrics["end_ms"]
+        )
+        timeline_html = _compute_activity_timeline(
+            storage, tenant_id, metrics["start_ms"], metrics["end_ms"]
+        )
 
         def cls(b):
             return "time-range-btn" + (" active" if b == btn else "")
@@ -3068,10 +3150,11 @@ def create_app(data_file=None, config_path=None):
             Input("report-month-filter", "value"),
             Input("report-project-filter", "value"),
         ],
+        [State("tenant-context", "data")],
         prevent_initial_call=True,
     )
-    def refresh_report(month_str, project_val):
-        return _build_report_content(storage, month_str, project_val)
+    def refresh_report(month_str, project_val, tenant_id):
+        return _build_report_content(storage, tenant_id, month_str, project_val)
 
     # 月度报告：客户端触发浏览器打印（另存为 PDF）
     app.clientside_callback(
@@ -3088,52 +3171,122 @@ def create_app(data_file=None, config_path=None):
 
     # 路由回调：根据 URL 分发页面
     @app.callback(
+        Output("url", "pathname"),
+        Input("global-tenant-switcher", "value"),
+        [State("url", "pathname"), State("tenant-context", "data")],
+        prevent_initial_call=True,
+    )
+    def switch_tenant(tenant_id, pathname, current_tenant_id):
+        if not tenant_id or tenant_id == current_tenant_id:
+            return dash.no_update
+        parts = (pathname or "").strip("/").split("/")
+        if len(parts) >= 3 and parts[0] == "tenants":
+            return f"/tenants/{tenant_id}/{parts[2]}"
+        if len(parts) >= 3 and parts[0] == "config" and parts[1] == "tenants":
+            suffix = "/audit" if len(parts) > 3 and parts[3] == "audit" else ""
+            return f"/config/tenants/{tenant_id}{suffix}"
+        return f"/tenants/{tenant_id}/overview"
+
+    @app.callback(
         [
             Output("page-content", "children"),
             Output("sidebar-container", "children"),
             Output("topbar-container", "children"),
+            Output("tenant-context", "data"),
         ],
         [Input("url", "pathname")]
     )
     def render_page(pathname):
-        # 归一化
-        if not pathname or pathname == "/":
-            pathname = "/overview"
+        pathname = unquote(pathname or "/")
+        tenant_id = default_tenant_id
+        tenant_ids = {item["tenant_id"] for item in config_manager.list_tenants()}
 
-        page_map = {
-            "/overview": lambda: create_overview_page(storage),
-            "/analytics": lambda: create_analytics_page(default_start_iso, default_end_iso, domains, projects),
-            "/report": lambda: create_report_page(storage, projects),
-            "/config": lambda: create_config_page(config_manager),
-            "/config-audit": lambda: create_config_audit_page(config_manager),
-            "/domains": lambda: create_domains_page(storage.get_domain_project_pairs(), projects),
-            "/dns": lambda: create_dns_page(domains),
-            "/cache": lambda: create_cache_page(),
-            "/security": lambda: create_security_page(),
-            "/ssl": lambda: create_ssl_page(domains),
-            "/waf": lambda: create_waf_page(),
-            "/speed": lambda: create_speed_page(),
-            "/rules": lambda: create_rules_page(),
-            "/loadbalancer": lambda: create_loadbalancer_page(),
-        }
-        page_fn = page_map.get(pathname)
-        if page_fn is None:
-            page = html.Div([
-                create_page_header("页面不存在", f"未找到路径 {pathname}"),
-            ])
+        if pathname == "/config":
+            page = create_tenant_list_page(config_manager)
+        elif pathname == "/config-audit":
+            page = create_config_audit_page(config_manager)
         else:
-            page = page_fn()
+            parts = pathname.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "config" and parts[1] == "tenants":
+                tenant_id = parts[2]
+                if tenant_id not in tenant_ids:
+                    page = html.Div([create_page_header("租户不存在", tenant_id)])
+                elif len(parts) > 3 and parts[3] == "audit":
+                    page = create_config_audit_page(config_manager, tenant_id)
+                else:
+                    page = html.Div(
+                        [
+                            create_config_page(config_manager, tenant_id),
+                            create_version_panel(config_manager, tenant_id),
+                        ]
+                    )
+            else:
+                if len(parts) >= 3 and parts[0] == "tenants":
+                    tenant_id = parts[1]
+                    page_key = parts[2]
+                else:
+                    # 旧链接继续可访问，但只能映射到明确的默认租户。
+                    page_key = parts[-1] if parts and parts[-1] else "overview"
+                if tenant_id not in tenant_ids:
+                    page = html.Div([create_page_header("租户不存在", tenant_id)])
+                else:
+                    tenant_domains = storage.get_domains(tenant_id=tenant_id)
+                    tenant_projects = storage.get_projects(tenant_id=tenant_id)
+                    end_ms = _resolve_end_time_ms(storage, tenant_id)
+                    end_dt = datetime.fromtimestamp(end_ms / 1000, tz=LOCAL_TZ)
+                    start_dt = end_dt - timedelta(days=7)
+                    start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    page_map = {
+                        "overview": lambda: create_overview_page(storage, tenant_id),
+                        "analytics": lambda: create_analytics_page(
+                            start_iso, end_iso, tenant_domains, tenant_projects
+                        ),
+                        "report": lambda: create_report_page(
+                            storage, tenant_id, tenant_projects
+                        ),
+                        "domains": lambda: create_domains_page(
+                            storage.get_domain_project_pairs(tenant_id=tenant_id),
+                            tenant_projects,
+                        ),
+                        "dns": lambda: create_dns_page(tenant_domains),
+                        "cache": create_cache_page,
+                        "security": create_security_page,
+                        "ssl": lambda: create_ssl_page(tenant_domains),
+                        "waf": create_waf_page,
+                        "speed": create_speed_page,
+                        "rules": create_rules_page,
+                        "loadbalancer": create_loadbalancer_page,
+                    }
+                    page_fn = page_map.get(page_key)
+                    page = (
+                        page_fn()
+                        if page_fn
+                        else html.Div([create_page_header("页面不存在", pathname)])
+                    )
 
-        sidebar = create_sidebar(pathname)
-        topbar = create_topbar(auth_config, pathname)
-        return page, sidebar, topbar
+        tenants = config_manager.list_tenants()
+        sidebar = create_sidebar(pathname, tenant_id)
+        topbar = create_topbar(auth_config, pathname, tenant_id, tenants)
+        return page, sidebar, topbar, tenant_id
 
     return app
 
 
-def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None, config_path=None):
+def run_dashboard(
+    host="0.0.0.0",
+    port=8050,
+    debug=False,
+    data_file=None,
+    config_path=None,
+    config_db_path=None,
+):
     """运行仪表板"""
-    app = create_app(data_file, config_path=config_path)
+    app = create_app(
+        data_file,
+        config_path=config_path,
+        config_db_path=config_db_path,
+    )
 
     # 获取存储信息
     storage = get_storage()
@@ -3146,7 +3299,7 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None, config
     print("\n" + "=" * 60)
     print("  CDN Panel Dashboard")
     print("=" * 60)
-    print(f"  数据存储: SQLite")
+    print("  数据存储: SQLite")
     print(f"  记录数量: {record_count:,} 条")
     if min_time and max_time:
         min_dt = datetime.fromtimestamp(min_time / 1000).strftime("%Y-%m-%d %H:%M")
@@ -3154,10 +3307,10 @@ def run_dashboard(host="0.0.0.0", port=8050, debug=False, data_file=None, config
         print(f"  数据范围: {min_dt} - {max_dt}")
     print("-" * 60)
     if auth_config["enabled"]:
-        print(f"  登录认证: 已启用")
+        print("  登录认证: 已启用")
         print(f"  用户列表: {', '.join(auth_config['users'].keys())}")
     else:
-        print(f"  登录认证: 未启用 (设置 DASHBOARD_PASSWORD 环境变量启用)")
+        print("  登录认证: 未启用 (设置 DASHBOARD_PASSWORD 环境变量启用)")
     print("=" * 60)
     print(f"  访问地址: http://127.0.0.1:{port}")
     print("=" * 60 + "\n")

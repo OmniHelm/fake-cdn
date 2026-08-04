@@ -106,19 +106,40 @@ export CDN_API_VIP=<your_vip>
 
 ### 后台配置管理
 
-仪表板已内置六步配置管理向导，可管理基础信息、流量目标、时间窗口、
-域名/地区权重、真实性参数和发布安全选项：
+配置管理以 `output/config.db` 为事实来源，按 `tenant_id` 隔离租户、不可变配置版本、
+草稿、发布、回滚、审计和生成任务。`config.json` 只用于首次迁移和未指定租户时的
+CLI 兼容模式，不再由后台页面直接改写。
+
+首次迁移并检查历史日志中的待映射租户：
+
+```bash
+python -m fake_cdn tenant-migrate --config ./config.json
+```
+
+启动管理后台：
 
 ```bash
 python -m fake_cdn dashboard --config ./config.json --port 8050
 ```
 
-打开 `http://127.0.0.1:8050/config`。后台保存配置时会：
+打开 `http://127.0.0.1:8050/config`。后台支持：
 
-1. 复用生成器的配置校验规则，并检查域名唯一性和权重合计。
-2. 使用配置 revision 防止覆盖其他会话的新版本。
-3. 先备份旧配置，再通过临时文件原子替换 `config.json`。
-4. 在 `output/config-management/audit.jsonl` 记录操作者和版本变化。
+1. Tenant 列表、创建和租户配置入口。
+2. 六步编辑器保存草稿，显式发布后才影响新的生成任务。
+3. 乐观锁防并发覆盖，历史版本可回滚为新的发布版本。
+4. 配置、发布、回滚和任务操作统一记录在数据库审计表。
+5. CDN 页面 URL 固定携带租户，例如 `/tenants/hccl/overview`；所有 SQL 都强制
+   使用 `tenant_id`，不提供默认跨租户“全部”视图。
+
+从数据库中的已发布版本运行任务：
+
+```bash
+python -m fake_cdn simulation --tenant-id hccl --dry-run
+python -m fake_cdn catchup --tenant-id hccl --start-date 2026-03-01 --end-date 2026-03-31
+```
+
+每个任务写入 `output/tenants/{tenant_id}/jobs/{job_id}/`，日志同时记录
+`tenant_id`、`config_version_id` 和 `generation_job_id`，便于追溯。
 
 配置保存不会自动生成数据或调用 CDN API。即使保存了推送模式，实际执行时仍需
 通过 CLI 的安全确认。对外提供仪表板时，可使用现有的单管理员登录，不需要额外
@@ -139,7 +160,7 @@ export DASHBOARD_SECRET_KEY=<stable-random-secret>
 
 ```
 fake-cdn/
-├── config.json              # 配置文件
+├── config.json              # 首次导入 / CLI 兼容配置
 ├── requirements.txt         # 依赖
 ├── README.md
 │
@@ -151,6 +172,7 @@ fake-cdn/
 │   │   ├── pusher.py        # HTTP 推送客户端
 │   │   ├── scheduler.py     # 调度器 (实时/补推)
 │   │   ├── storage.py       # SQLite 存储
+│   │   ├── tenant_config.py # Tenant 配置版本、审计与任务
 │   │   └── validator.py     # 95计费验证器
 │   └── dashboard/           # 可视化仪表板
 │       └── app.py           # Dash 应用
@@ -160,6 +182,7 @@ fake-cdn/
 │   └── quickstart.sh        # 快速启动
 │
 └── output/                  # 输出目录
+    ├── config.db            # 多租户配置数据库
     ├── cdn_logs.db          # SQLite 数据库
     ├── realtime.log         # 实时推送日志
     └── dashboard.log        # 仪表板日志

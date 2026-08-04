@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """调度器：支持 catchup 与基于计划的 realtime。"""
+
+from __future__ import annotations
 
 import json
 import os
@@ -54,7 +54,11 @@ class RealtimeScheduler:
         self.plan_index = {point.timestamp_ms: point for point in self.plan_points}
 
     def _build_plan_id(self) -> str:
-        return "{start}_{end}_{seed}".format(
+        runtime = self.config.get("_runtime", {})
+        return "{tenant}_{version}_{checksum}_{start}_{end}_{seed}".format(
+            tenant=self.config["dimensions"]["tenant_id"],
+            version=runtime.get("config_version_id", "legacy"),
+            checksum=str(runtime.get("config_checksum", "legacy"))[:12],
             start=self.config["time"]["start_datetime"].replace(" ", "T"),
             end=self.config["time"]["end_datetime"].replace(" ", "T"),
             seed=self.config["target"]["random_seed"],
@@ -139,7 +143,11 @@ class RealtimeScheduler:
 
         if result["success"] == len(logs):
             if self.config["mode"].get("save_local", True):
-                LocalSaver.save_logs(logs, self.output_dir)
+                LocalSaver.save_logs(
+                    logs,
+                    self.output_dir,
+                    db_path=self.config.get("_runtime", {}).get("log_db_path"),
+                )
             self.state["pushed_timestamps"].append(timestamp_ms)
             self.state["pushed_timestamps"] = sorted(set(self.state["pushed_timestamps"]))
             self._save_state()
@@ -213,7 +221,11 @@ class CatchupScheduler:
 
         logs, stats = self.generator.generate_window_logs()
         if self.config["mode"].get("save_local", True):
-            LocalSaver.save_logs(logs, self.output_dir)
+            LocalSaver.save_logs(
+                logs,
+                self.output_dir,
+                db_path=self.config.get("_runtime", {}).get("log_db_path"),
+            )
             LocalSaver.save_stats(stats, self.output_dir, "stats.json")
             LocalSaver.save_flux_curve(self.generator.generate_window_plan(), self.output_dir, "flux_curve.csv")
 

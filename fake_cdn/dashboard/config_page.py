@@ -15,11 +15,11 @@ from flask import session
 
 from fake_cdn.core.config_manager import (
     ConfigConflictError,
-    ConfigManager,
     ConfigManagerError,
     ConfigValidationError,
 )
 from fake_cdn.core.generator import DEFAULT_PROFILES
+from fake_cdn.core.tenant_config import TenantConfigStore
 
 STEPS = [
     "基础信息",
@@ -338,10 +338,10 @@ def _review_content(config: Dict, summary: Dict):
     )
 
 
-def create_config_page(manager: ConfigManager):
+def create_config_page(manager: TenantConfigStore, tenant_id: str):
     """创建六步配置编辑器，默认打开与确认原型一致的第 4 步。"""
     try:
-        snapshot = manager.load()
+        snapshot = manager.load(tenant_id)
     except ConfigManagerError as exc:
         return html.Div(
             [
@@ -396,7 +396,7 @@ def create_config_page(manager: ConfigManager):
     step_one = _step_panel(
         0,
         [
-            _simple_step_heading("基础信息", "定义配置名称、租户、项目和部署平台。"),
+            _simple_step_heading("基础信息", "租户 ID 是数据隔离边界，不可在配置中修改。"),
             html.Div(
                 [
                     _field(
@@ -415,7 +415,8 @@ def create_config_page(manager: ConfigManager):
                         "租户 ID",
                         _input(
                             "dimensions.tenant_id",
-                            _nested(config, "dimensions.tenant_id", "fake-cdn"),
+                            tenant_id,
+                            disabled=True,
                         ),
                     ),
                     _field(
@@ -791,7 +792,7 @@ def create_config_page(manager: ConfigManager):
     step_six = _step_panel(
         5,
         [
-            _simple_step_heading("校验发布", "检查配置完整性并保存到当前 config.json。"),
+            _simple_step_heading("校验发布", "先保存不可变草稿，再明确发布为租户生效版本。"),
             html.Div(
                 [
                     _field(
@@ -839,12 +840,17 @@ def create_config_page(manager: ConfigManager):
     return html.Div(
         [
             dcc.Store(id="config-active-step", data=active_step),
+            dcc.Store(id="config-tenant-id", data=tenant_id),
             dcc.Store(id="config-revision", data=snapshot["revision"]),
             dcc.Store(id="config-base", data=config),
             html.Div(
                 [
-                    html.H2("新建流量配置"),
-                    html.Span(f"配置文件：{snapshot['path']}", className="config-path"),
+                    html.H2(f"{snapshot['display_name']} · 流量配置"),
+                    html.Span(
+                        f"{tenant_id} · v{snapshot['version_no']} · {snapshot['status']} · "
+                        f"{snapshot['checksum'][:12]}",
+                        className="config-path",
+                    ),
                 ],
                 className="config-page-heading",
             ),
@@ -1019,7 +1025,7 @@ def _parse_domain_lines(text: str) -> List[Dict]:
     return rows
 
 
-def register_config_callbacks(app: dash.Dash, manager: ConfigManager) -> None:
+def register_config_callbacks(app: dash.Dash, manager: TenantConfigStore) -> None:
     step_inputs = [Input(f"config-step-button-{index}", "n_clicks") for index in range(len(STEPS))]
 
     @app.callback(
@@ -1272,6 +1278,7 @@ def register_config_callbacks(app: dash.Dash, manager: ConfigManager) -> None:
             State(_field_id(ALL), "value"),
             State("config-domain-table", "data"),
             State("config-region-table", "data"),
+            State("config-tenant-id", "data"),
         ],
         prevent_initial_call=True,
     )
@@ -1285,6 +1292,7 @@ def register_config_callbacks(app: dash.Dash, manager: ConfigManager) -> None:
         field_values,
         domain_rows,
         region_rows,
+        tenant_id,
     ):
         triggered = dash.callback_context.triggered_id
         if triggered == "config-next" and int(active_step or 0) != len(STEPS) - 1:
@@ -1292,17 +1300,24 @@ def register_config_callbacks(app: dash.Dash, manager: ConfigManager) -> None:
 
         try:
             candidate = _build_candidate(base, field_ids, field_values, domain_rows, region_rows)
-            deployment_mode = candidate.get("deployment", {}).get("mode", "preview")
-            action = (
-                "publish_preview"
-                if triggered == "config-next" and deployment_mode == "preview"
-                else "save_config"
-            )
             actor = session.get("username", "dashboard")
-            saved = manager.save(candidate, expected_revision=revision, actor=actor, action=action)
-            detail = "配置已原子写入，原版本已备份。"
-            if saved.get("audit_error"):
-                detail += f" 审计记录写入失败：{saved['audit_error']}"
+            draft = manager.save_draft(
+                tenant_id,
+                candidate,
+                expected_revision=revision,
+                actor=actor,
+            )
+            if triggered == "config-next":
+                saved = manager.publish(
+                    tenant_id,
+                    draft["id"],
+                    expected_revision=draft["revision"],
+                    actor=actor,
+                )
+                detail = f"已发布 v{saved['version_no']}，新的生成任务将使用此版本。"
+            else:
+                saved = draft
+                detail = f"已保存草稿 v{saved['version_no']}，当前生效版本未改变。"
             return (
                 [_icon("check_circle"), html.Div([html.Strong("配置保存成功"), html.Span(detail)])],
                 "config-save-alert visible success",
@@ -1325,9 +1340,9 @@ def register_config_callbacks(app: dash.Dash, manager: ConfigManager) -> None:
             )
 
 
-def create_config_audit_page(manager: ConfigManager):
+def create_config_audit_page(manager: TenantConfigStore, tenant_id: str = None):
     try:
-        records = manager.read_audit(limit=100)
+        records = manager.read_audit(tenant_id=tenant_id, limit=100)
     except ConfigManagerError as exc:
         records = []
         error = str(exc)
@@ -1343,8 +1358,9 @@ def create_config_audit_page(manager: ConfigManager):
                 .replace("+00:00", " UTC"),
                 "actor": record.get("actor", "—"),
                 "action": record.get("action", "—"),
-                "previous": str(record.get("previous_revision", ""))[:12],
-                "revision": str(record.get("revision", ""))[:12],
+                "tenant": record.get("tenant_id", tenant_id or "—"),
+                "version": str(record.get("version_id") or "—"),
+                "source": str(record.get("detail", {}).get("source_version_id") or "—"),
             }
         )
 
@@ -1370,10 +1386,11 @@ def create_config_audit_page(manager: ConfigManager):
                 data=rows,
                 columns=[
                     {"name": "时间", "id": "timestamp"},
+                    {"name": "租户", "id": "tenant"},
                     {"name": "操作者", "id": "actor"},
                     {"name": "动作", "id": "action"},
-                    {"name": "旧版本", "id": "previous"},
-                    {"name": "新版本", "id": "revision"},
+                    {"name": "版本 ID", "id": "version"},
+                    {"name": "来源版本 ID", "id": "source"},
                 ],
                 page_size=20,
                 style_header={
@@ -1402,7 +1419,10 @@ def create_config_audit_page(manager: ConfigManager):
                     html.Div(
                         [
                             html.H2("配置审计日志"),
-                            html.P("追踪每次后台保存产生的版本、备份和操作者。"),
+                            html.P(
+                                f"追踪租户 {tenant_id} 的草稿、发布、回滚与生成任务。"
+                                if tenant_id else "追踪所有租户的配置与生成操作。"
+                            ),
                         ]
                     )
                 ],

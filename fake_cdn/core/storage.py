@@ -3,11 +3,10 @@ SQLite 存储模块
 用于高效存储和查询 CDN 日志数据
 """
 
-import sqlite3
 import os
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+import sqlite3
 from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple
 
 
 class CDNLogStorage:
@@ -25,13 +24,30 @@ class CDNLogStorage:
             self._migrate_project_column(conn)
 
     def _migrate_project_column(self, conn):
-        """为 cdn_logs 添加 project 列（幂等迁移），并回填老数据"""
+        """补齐租户、任务与配置版本字段（幂等迁移）。"""
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(cdn_logs)")}
         if "project" not in cols:
             conn.execute("ALTER TABLE cdn_logs ADD COLUMN project TEXT")
+        if "config_version_id" not in cols:
+            conn.execute("ALTER TABLE cdn_logs ADD COLUMN config_version_id INTEGER")
+        if "generation_job_id" not in cols:
+            conn.execute("ALTER TABLE cdn_logs ADD COLUMN generation_job_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_project ON cdn_logs(project)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_project_time ON cdn_logs(project, start_time)")
-        # 老数据回填：优先用 tenant_id，为空则设为"默认"
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant_time ON cdn_logs(tenant_id, start_time)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant_domain_time "
+            "ON cdn_logs(tenant_id, domain, start_time)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant_project_time "
+            "ON cdn_logs(tenant_id, project, start_time)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant_job "
+            "ON cdn_logs(tenant_id, generation_job_id)"
+        )
+        # 老数据回填：project 保留原语义；tenant_id 不从项目反推，避免错误合并租户。
         conn.execute("""
             UPDATE cdn_logs
             SET project = COALESCE(NULLIF(tenant_id, ''), '默认')
@@ -77,7 +93,9 @@ class CDNLogStorage:
                 bs_http_code_2xx INTEGER,
                 bs_http_code_3xx INTEGER,
                 bs_http_code_4xx INTEGER,
-                bs_http_code_5xx INTEGER
+                bs_http_code_5xx INTEGER,
+                config_version_id INTEGER,
+                generation_job_id TEXT
             )
         """)
 
@@ -95,6 +113,8 @@ class CDNLogStorage:
         for log in logs:
             if not log.get("project"):
                 log["project"] = log.get("tenantId") or "默认"
+            log.setdefault("configVersionId", None)
+            log.setdefault("generationJobId", None)
 
         with self._get_conn() as conn:
             conn.executemany("""
@@ -103,13 +123,15 @@ class CDNLogStorage:
                     bw, flux, bs_bw, bs_flux,
                     req_num, hit_num, bs_num, bs_fail_num, hit_flux,
                     http_code_2xx, http_code_3xx, http_code_4xx, http_code_5xx,
-                    bs_http_code_2xx, bs_http_code_3xx, bs_http_code_4xx, bs_http_code_5xx
+                    bs_http_code_2xx, bs_http_code_3xx, bs_http_code_4xx, bs_http_code_5xx,
+                    config_version_id, generation_job_id
                 ) VALUES (
                     :start_time, :tenantId, :project, :domain, :country, :region, :interval,
                     :bw, :flux, :bs_bw, :bs_flux,
                     :req_num, :hit_num, :bs_num, :bs_fail_num, :hit_flux,
                     :http_code_2xx, :http_code_3xx, :http_code_4xx, :http_code_5xx,
-                    :bs_http_code_2xx, :bs_http_code_3xx, :bs_http_code_4xx, :bs_http_code_5xx
+                    :bs_http_code_2xx, :bs_http_code_3xx, :bs_http_code_4xx, :bs_http_code_5xx,
+                    :configVersionId, :generationJobId
                 )
             """, logs)
 
@@ -121,11 +143,16 @@ class CDNLogStorage:
         end_time: Optional[int] = None,
         domain: Optional[str] = None,
         project: Optional[str] = None,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict]:
         """查询日志"""
         query = "SELECT * FROM cdn_logs WHERE 1=1"
         params = []
+
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
 
         if start_time:
             query += " AND start_time >= ?"
@@ -153,13 +180,21 @@ class CDNLogStorage:
             cursor = conn.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_time_range(self, project: Optional[str] = None) -> Tuple[Optional[int], Optional[int]]:
+    def get_time_range(
+        self, project: Optional[str] = None, tenant_id: Optional[str] = None
+    ) -> Tuple[Optional[int], Optional[int]]:
         """获取数据时间范围"""
         query = "SELECT MIN(start_time) as min_time, MAX(start_time) as max_time FROM cdn_logs"
         params = []
+        where = []
+        if tenant_id:
+            where.append("tenant_id = ?")
+            params.append(tenant_id)
         if project:
-            query += " WHERE project = ?"
+            where.append("project = ?")
             params.append(project)
+        if where:
+            query += " WHERE " + " AND ".join(where)
         with self._get_conn() as conn:
             cursor = conn.execute(query, params)
             row = cursor.fetchone()
@@ -167,35 +202,62 @@ class CDNLogStorage:
                 return row["min_time"], row["max_time"]
             return None, None
 
-    def get_domains(self, project: Optional[str] = None) -> List[str]:
+    def get_domains(
+        self, project: Optional[str] = None, tenant_id: Optional[str] = None
+    ) -> List[str]:
         """获取所有域名列表（可按项目过滤）"""
         query = "SELECT DISTINCT domain FROM cdn_logs"
         params = []
+        where = []
+        if tenant_id:
+            where.append("tenant_id = ?")
+            params.append(tenant_id)
         if project:
-            query += " WHERE project = ?"
+            where.append("project = ?")
             params.append(project)
+        if where:
+            query += " WHERE " + " AND ".join(where)
         query += " ORDER BY domain"
         with self._get_conn() as conn:
             cursor = conn.execute(query, params)
             return [row["domain"] for row in cursor.fetchall()]
 
-    def get_projects(self) -> List[str]:
-        """获取所有项目列表"""
+    def get_projects(self, tenant_id: Optional[str] = None) -> List[str]:
+        """获取租户内的项目列表。"""
+        query = (
+            "SELECT DISTINCT project FROM cdn_logs "
+            "WHERE project IS NOT NULL AND project != ''"
+        )
+        params = []
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
+        query += " ORDER BY project"
         with self._get_conn() as conn:
-            cursor = conn.execute(
-                "SELECT DISTINCT project FROM cdn_logs "
-                "WHERE project IS NOT NULL AND project != '' "
-                "ORDER BY project"
-            )
+            cursor = conn.execute(query, params)
             return [row["project"] for row in cursor.fetchall()]
 
-    def get_domain_project_pairs(self, project: Optional[str] = None) -> List[Dict]:
+    def get_tenants(self) -> List[str]:
+        """返回日志数据库中真实存在的租户，不推断或改写标识。"""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT tenant_id FROM cdn_logs "
+                "WHERE tenant_id IS NOT NULL AND tenant_id != '' ORDER BY tenant_id"
+            ).fetchall()
+        return [row["tenant_id"] for row in rows]
+
+    def get_domain_project_pairs(
+        self, project: Optional[str] = None, tenant_id: Optional[str] = None
+    ) -> List[Dict]:
         """获取 (domain, project) 组合，用于域名管理页"""
         query = (
             "SELECT DISTINCT domain, project FROM cdn_logs "
             "WHERE project IS NOT NULL AND project != ''"
         )
         params: list = []
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
         if project:
             query += " AND project = ?"
             params.append(project)
@@ -208,6 +270,7 @@ class CDNLogStorage:
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         project: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict:
         """获取统计信息"""
         query = """
@@ -224,6 +287,10 @@ class CDNLogStorage:
             WHERE 1=1
         """
         params = []
+
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
 
         if start_time:
             query += " AND start_time >= ?"
@@ -248,6 +315,7 @@ class CDNLogStorage:
         end_time: Optional[int] = None,
         domain: Optional[str] = None,
         project: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         interval_ms: int = 300000  # 默认5分钟
     ) -> List[Dict]:
         """按时间聚合数据（用于图表）"""
@@ -274,6 +342,10 @@ class CDNLogStorage:
             WHERE 1=1
         """
         params = [interval_ms, interval_ms]
+
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
 
         if start_time:
             query += " AND start_time >= ?"
@@ -302,6 +374,7 @@ class CDNLogStorage:
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         project: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         limit: int = 10
     ) -> List[Dict]:
         """按域名聚合数据（用于排行榜）"""
@@ -315,6 +388,10 @@ class CDNLogStorage:
             WHERE 1=1
         """
         params = []
+
+        if tenant_id:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
 
         if start_time:
             query += " AND start_time >= ?"
@@ -341,10 +418,15 @@ class CDNLogStorage:
             conn.execute("DELETE FROM cdn_logs")
         print("[存储] 已清空所有日志")
 
-    def get_record_count(self) -> int:
-        """获取记录总数"""
+    def get_record_count(self, tenant_id: Optional[str] = None) -> int:
+        """获取记录数；前端调用必须传入 tenant_id。"""
+        query = "SELECT COUNT(*) as cnt FROM cdn_logs"
+        params = []
+        if tenant_id:
+            query += " WHERE tenant_id = ?"
+            params.append(tenant_id)
         with self._get_conn() as conn:
-            cursor = conn.execute("SELECT COUNT(*) as cnt FROM cdn_logs")
+            cursor = conn.execute(query, params)
             row = cursor.fetchone()
             return row["cnt"] if row else 0
 
