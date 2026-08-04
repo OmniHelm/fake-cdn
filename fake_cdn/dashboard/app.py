@@ -1169,26 +1169,60 @@ INDEX_STRING = '''
             .tenant-switcher { width: 190px; font-size: 12px; }
             .tenant-admin-page, .tenant-version-card { --config-blue: #0ea5e9; --config-blue-dark: #0284c7; }
             .tenant-admin-page { display: flex; flex-direction: column; gap: 20px; }
+            .tenant-page-actions { display: flex; align-items: center; gap: 14px; }
             .tenant-count, .tenant-meta { color: #64748b; font-size: 12px; }
-            .tenant-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
-            .tenant-card, .tenant-create-card, .tenant-version-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; }
-            .tenant-card { display: flex; flex-direction: column; gap: 18px; border-top: 3px solid #0ea5e9; }
-            .tenant-card-identity, .tenant-card-meta, .tenant-card-actions, .tenant-create-form, .tenant-version-heading, .tenant-version-actions { display: flex; align-items: center; gap: 12px; }
+            .tenant-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+            .tenant-card, .tenant-version-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; }
+            .tenant-card { display: flex; min-height: 164px; flex-direction: column; gap: 18px; border-top: 3px solid #0ea5e9; }
+            .tenant-card-identity, .tenant-card-meta, .tenant-card-actions, .tenant-version-heading, .tenant-version-actions { display: flex; align-items: center; gap: 12px; }
             .tenant-card-identity h3 { margin: 0 0 4px; }
             .tenant-card-identity code { color: #475569; font-size: 12px; }
             .tenant-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 8px; background: #e0f2fe; color: #0369a1; font-weight: 800; }
             .tenant-card-meta { flex-wrap: wrap; }
             .tenant-card-actions { margin-top: auto; }
             .tenant-card-actions a { text-decoration: none; }
-            .tenant-create-heading h3, .tenant-version-heading h3 { margin: 0 0 4px; }
-            .tenant-create-heading p, .tenant-version-heading p { margin: 0 0 16px; color: #64748b; font-size: 13px; }
-            .tenant-create-form > * { flex: 1; min-width: 160px; }
+            .tenant-empty-state { display: flex; min-height: 240px; grid-column: 1 / -1; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #64748b; background: rgba(255,255,255,.55); text-align: center; }
+            .tenant-empty-state .material-symbols-outlined { color: #94a3b8; font-size: 30px; }
+            .tenant-empty-state h3, .tenant-empty-state p { margin: 0; }
+            .tenant-empty-state h3 { color: #334155; font-size: 15px; }
+            .tenant-empty-state p { font-size: 12px; }
             .tenant-version-heading { justify-content: space-between; }
+            .tenant-version-heading h3 { margin: 0 0 4px; }
+            .tenant-version-heading p { margin: 0 0 16px; color: #64748b; font-size: 13px; }
             .tenant-version-actions .config-dropdown { min-width: 360px; }
+
+            .tenant-create-modal { position: fixed; z-index: 200; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(15,23,42,.52); backdrop-filter: blur(2px); }
+            .tenant-create-modal.is-open { display: flex; }
+            .tenant-modal-panel { width: min(100%, 520px); overflow: hidden; border: 1px solid rgba(255,255,255,.7); border-radius: 12px; background: #fff; box-shadow: 0 24px 64px rgba(15,23,42,.24); animation: tenant-modal-enter .16s ease-out; }
+            .tenant-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 22px 24px 18px; border-bottom: 1px solid #e2e8f0; }
+            .tenant-modal-heading { display: flex; align-items: center; gap: 12px; }
+            .tenant-modal-heading > .material-symbols-outlined { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 8px; color: #0284c7; background: #e0f2fe; font-size: 21px; }
+            .tenant-modal-heading h3 { margin: 0 0 4px; color: #0f172a; font-size: 17px; }
+            .tenant-modal-heading p { margin: 0; color: #64748b; font-size: 12px; }
+            .tenant-modal-close { display: grid; width: 34px; height: 34px; place-items: center; padding: 0; border: 0; border-radius: 6px; color: #64748b; background: transparent; cursor: pointer; }
+            .tenant-modal-close:hover { color: #0f172a; background: #f1f5f9; }
+            .tenant-modal-close .material-symbols-outlined { font-size: 20px; }
+            .tenant-modal-body { display: flex; flex-direction: column; gap: 18px; padding: 22px 24px 24px; }
+            .tenant-modal-field { display: flex; flex-direction: column; gap: 8px; color: #334155; font-size: 12px; font-weight: 600; }
+            .tenant-modal-field small { color: #94a3b8; font-size: 10px; font-weight: 400; }
+            .tenant-modal-body .config-inline-validation { max-width: none; margin-top: 0; }
+            .tenant-modal-body .config-inline-validation.success { justify-content: space-between; }
+            .tenant-modal-body .config-inline-validation a { color: #047857; font-weight: 700; }
+            .tenant-modal-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid #e2e8f0; background: #f8fafc; }
+            @keyframes tenant-modal-enter { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+            @media (prefers-reduced-motion: reduce) { .tenant-modal-panel { animation: none; } }
             @media (max-width: 900px) {
                 .tenant-context-label { display: none; }
                 .tenant-switcher { width: 145px; }
-                .tenant-create-form { align-items: stretch; flex-direction: column; }
+                .tenant-admin-page .page-header { align-items: flex-start; gap: 16px; }
+                .tenant-page-actions { align-items: flex-end; flex-direction: column-reverse; }
+            }
+            @media (max-width: 620px) {
+                .tenant-admin-page .page-header { flex-direction: column; }
+                .tenant-page-actions { width: 100%; align-items: center; justify-content: space-between; flex-direction: row; }
+                .tenant-grid { grid-template-columns: 1fr; }
+                .tenant-create-modal { align-items: flex-end; padding: 0; }
+                .tenant-modal-panel { width: 100%; max-height: calc(100vh - 24px); overflow-y: auto; border-radius: 14px 14px 0 0; }
             }
 
             /* ===== 打印样式（导出 PDF 专用） ===== */
