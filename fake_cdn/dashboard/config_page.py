@@ -20,6 +20,7 @@ from fake_cdn.core.config_manager import (
 )
 from fake_cdn.core.generator import DEFAULT_PROFILES
 from fake_cdn.core.tenant_config import TenantConfigStore
+from fake_cdn.dashboard.auth import is_admin_session
 
 STEPS = [
     "基础信息",
@@ -1297,6 +1298,13 @@ def register_config_callbacks(app: dash.Dash, manager: TenantConfigStore) -> Non
         triggered = dash.callback_context.triggered_id
         if triggered == "config-next" and int(active_step or 0) != len(STEPS) - 1:
             raise PreventUpdate
+        if not is_admin_session():
+            return (
+                [_icon("lock"), html.Span("仅管理员可以保存或发布配置。")],
+                "config-save-alert visible danger",
+                dash.no_update,
+                dash.no_update,
+            )
 
         try:
             candidate = _build_candidate(base, field_ids, field_values, domain_rows, region_rows)

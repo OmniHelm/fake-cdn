@@ -11,6 +11,7 @@ from flask import session
 
 from fake_cdn.core.config_manager import ConfigManagerError
 from fake_cdn.core.tenant_config import TenantConfigStore
+from fake_cdn.dashboard.auth import is_admin_session
 
 
 def create_tenant_list_page(store: TenantConfigStore):
@@ -344,6 +345,14 @@ def register_tenant_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
         if trigger != "tenant-create-submit":
             raise PreventUpdate
 
+        if not is_admin_session():
+            return (
+                "tenant-create-modal is-open",
+                html.Div(
+                    "仅管理员可以创建租户。",
+                    className="config-inline-validation danger",
+                ),
+            )
         if not tenant_id or not source_tenant:
             return (
                 "tenant-create-modal is-open",
@@ -390,6 +399,11 @@ def register_tenant_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
         prevent_initial_call=True,
     )
     def rollback_version(_clicks, version_id, tenant_id, revision):
+        if not is_admin_session():
+            return (
+                html.Div("仅管理员可以回滚配置。", className="config-inline-validation danger"),
+                dash.no_update,
+            )
         if not version_id:
             raise PreventUpdate
         try:

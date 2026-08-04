@@ -21,6 +21,14 @@ from plotly.subplots import make_subplots
 
 from ..core.storage import CDNLogStorage, get_default_storage
 from ..core.tenant_config import TenantConfigStore, get_default_config_store
+from .auth import (
+    authenticate_user,
+    get_auth_config,
+    is_admin_session,
+    is_public_auth_path,
+    resolve_tenant_scope,
+    verify_password,
+)
 from .config_page import (
     create_config_audit_page,
     create_config_page,
@@ -32,6 +40,8 @@ from .tenant_admin import (
     register_tenant_callbacks,
 )
 
+__all__ = ["create_app", "get_auth_config", "is_public_auth_path", "verify_password"]
+
 try:
     from zoneinfo import ZoneInfo
 
@@ -39,61 +49,6 @@ try:
 except ImportError:
     # Python 3.8 fallback
     LOCAL_TZ = timezone(timedelta(hours=8))
-
-
-# ============================================================================
-# 认证配置
-# ============================================================================
-def get_auth_config():
-    """获取认证配置，从环境变量读取
-
-    支持多用户:
-    - DASHBOARD_USERNAME / DASHBOARD_PASSWORD: 主用户（默认 admin）
-    - DASHBOARD_USERS: JSON 格式额外用户，如 {"viewer":"pass123","ops":"pass456"}
-    """
-    password = os.environ.get("DASHBOARD_PASSWORD", "")
-    username = os.environ.get("DASHBOARD_USERNAME", "admin")
-
-    # 构建用户字典
-    users = {}
-    if password:
-        users[username] = password
-
-    # 解析额外用户
-    extra_users = os.environ.get("DASHBOARD_USERS", "")
-    if extra_users:
-        import json
-        try:
-            parsed = json.loads(extra_users)
-            if isinstance(parsed, dict):
-                users.update(parsed)
-        except json.JSONDecodeError:
-            print("[警告] DASHBOARD_USERS 格式错误，应为 JSON 对象")
-
-    return {
-        "enabled": bool(users),
-        "users": users,
-    }
-
-
-def verify_password(username: str, password: str) -> bool:
-    """验证用户名密码（支持多用户）"""
-    config = get_auth_config()
-    if not config["enabled"]:
-        return True
-    # 遍历所有用户，使用常量时间比较防止时序攻击
-    for valid_user, valid_pass in config["users"].items():
-        correct_user = secrets.compare_digest(username, valid_user)
-        correct_pass = secrets.compare_digest(password, valid_pass)
-        if correct_user and correct_pass:
-            return True
-    return False
-
-
-def is_public_auth_path(path: str) -> bool:
-    """认证启用时仍允许匿名访问的登录页和静态资源。"""
-    public_paths = {"/login", "/logout", "/favicon.ico", "/_favicon.ico"}
-    return path in public_paths or path.startswith(("/assets/", "/_dash-component-suites/"))
 
 
 # ============================================================================
@@ -1167,6 +1122,10 @@ INDEX_STRING = '''
             .tenant-context { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 3px solid #38bdf8; }
             .tenant-context-label { color: #64748b; font: 700 9px/1 'SF Mono', Monaco, monospace; letter-spacing: .12em; }
             .tenant-switcher { width: 190px; font-size: 12px; }
+            .tenant-context-fixed { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 1px solid #bae6fd; border-left: 3px solid #0ea5e9; border-radius: 6px; color: #075985; background: #f0f9ff; }
+            .tenant-context-fixed .material-symbols-outlined { font-size: 15px; }
+            .tenant-context-fixed code { font: 700 11px/1 'SF Mono', Monaco, monospace; }
+            .topbar-account { color: #64748b; font-size: 11px; white-space: nowrap; }
             .tenant-admin-page, .tenant-version-card { --config-blue: #0ea5e9; --config-blue-dark: #0284c7; }
             .tenant-admin-page { display: flex; flex-direction: column; gap: 20px; }
             .tenant-page-actions { display: flex; align-items: center; gap: 14px; }
@@ -1362,7 +1321,7 @@ LOGIN_PAGE = '''
     <div class="login-container">
         <div class="login-header">
             <h1>CDN Panel</h1>
-            <p>请输入凭据以访问控制台</p>
+            <p>管理员或租户账号均可登录</p>
         </div>
         <div class="error-msg">{error_message}</div>
         <form method="POST" action="/login">
@@ -1402,7 +1361,7 @@ PAGE_TITLES = {
 }
 
 
-def create_sidebar(current_path="/overview", tenant_id=None):
+def create_sidebar(current_path="/overview", tenant_id=None, is_admin=True):
     """创建侧边栏导航，current_path 决定 active 项"""
     # 归一化 /
     if current_path in ("/", ""):
@@ -1417,6 +1376,27 @@ def create_sidebar(current_path="/overview", tenant_id=None):
             html.Span(label),
         ], href=resolved_href, className=cls, refresh=False)
 
+    primary_items = [
+        nav_item("dashboard", "概览", "/overview"),
+        nav_item("analytics", "流量分析", "/analytics"),
+        nav_item("summarize", "月度报告", "/report"),
+        nav_item("language", "域名管理", "/domains"),
+    ]
+    admin_items = [
+        html.Div("配置中心", className="sidebar-section"),
+        nav_item("assignment", "配置管理", "/config"),
+        nav_item("history", "审计日志", "/config-audit"),
+        html.Div("CDN 功能", className="sidebar-section"),
+        nav_item("dns", "DNS 记录", "/dns"),
+        nav_item("cached", "缓存", "/cache"),
+        nav_item("shield", "安全防护", "/security"),
+        nav_item("lock", "SSL/TLS", "/ssl"),
+        nav_item("local_fire_department", "WAF 防火墙", "/waf"),
+        nav_item("speed", "性能优化", "/speed"),
+        html.Div("网络", className="sidebar-section"),
+        nav_item("tune", "流量规则", "/rules"),
+        nav_item("cloud_sync", "负载均衡", "/loadbalancer"),
+    ]
     return html.Div([
         # Logo
         html.Div([
@@ -1425,29 +1405,8 @@ def create_sidebar(current_path="/overview", tenant_id=None):
 
         # 主要导航
         html.Div("主要", className="sidebar-section"),
-        nav_item("dashboard", "概览", "/overview"),
-        nav_item("analytics", "流量分析", "/analytics"),
-        nav_item("summarize", "月度报告", "/report"),
-        nav_item("language", "域名管理", "/domains"),
-        nav_item("dns", "DNS 记录", "/dns"),
-
-        # 配置中心
-        html.Div("配置中心", className="sidebar-section"),
-        nav_item("assignment", "配置管理", "/config"),
-        nav_item("history", "审计日志", "/config-audit"),
-
-        # CDN 功能配置
-        html.Div("CDN 功能", className="sidebar-section"),
-        nav_item("cached", "缓存", "/cache"),
-        nav_item("shield", "安全防护", "/security"),
-        nav_item("lock", "SSL/TLS", "/ssl"),
-        nav_item("local_fire_department", "WAF 防火墙", "/waf"),
-        nav_item("speed", "性能优化", "/speed"),
-
-        # 网络
-        html.Div("网络", className="sidebar-section"),
-        nav_item("tune", "流量规则", "/rules"),
-        nav_item("cloud_sync", "负载均衡", "/loadbalancer"),
+        *primary_items,
+        *(admin_items if is_admin else []),
 
         # 底部状态
         html.Div([
@@ -1457,13 +1416,20 @@ def create_sidebar(current_path="/overview", tenant_id=None):
     ], className="sidebar")
 
 
-def create_topbar(auth_config, current_path="/overview", tenant_id=None, tenants=None):
+def create_topbar(
+    auth_config,
+    current_path="/overview",
+    tenant_id=None,
+    tenants=None,
+    is_admin=True,
+    username=None,
+):
     """创建顶部信息栏"""
     page_key = "/" + current_path.rstrip("/").split("/")[-1]
     page_title = PAGE_TITLES.get(page_key, "租户配置" if "/config/tenants/" in current_path else "概览")
 
-    right_items = [
-        html.Div(
+    if is_admin:
+        tenant_control = html.Div(
             [
                 html.Span("TENANT", className="tenant-context-label"),
                 dcc.Dropdown(
@@ -1480,13 +1446,34 @@ def create_topbar(auth_config, current_path="/overview", tenant_id=None, tenants
                 ),
             ],
             className="tenant-context",
-        ),
+        )
+    else:
+        tenant_control = html.Div(
+            [
+                html.Span("lock", className="material-symbols-outlined"),
+                html.Span("已绑定", className="tenant-context-label"),
+                html.Code(tenant_id or "—"),
+                dcc.Input(id="global-tenant-switcher", value=tenant_id, type="hidden"),
+            ],
+            className="tenant-context-fixed",
+            title="账号只能查看此租户的数据",
+        )
+
+    right_items = [
+        tenant_control,
         html.Div([
             html.Span(className="status-dot green"),
             html.Span("健康"),
         ], className="topbar-status"),
         html.Span(id="refresh-status", className="topbar-refresh"),
     ]
+    if username:
+        right_items.append(
+            html.Span(
+                f"{username} · {'管理员' if is_admin else '普通用户'}",
+                className="topbar-account",
+            )
+        )
     if auth_config["enabled"]:
         right_items.append(
             html.A("退出登录", href="/logout", className="topbar-logout")
@@ -2685,6 +2672,9 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
     config_manager.bootstrap(sorted(resolved_config_path.parent.glob("config*.json")))
     tenant_rows = config_manager.list_tenants()
     configured_ids = {item["tenant_id"] for item in tenant_rows}
+    active_tenant_ids = {
+        item["tenant_id"] for item in tenant_rows if item.get("status") == "active"
+    }
     log_tenants = storage.get_tenants()
     default_tenant_id = next(
         (tenant_id for tenant_id in log_tenants if tenant_id in configured_ids),
@@ -2720,9 +2710,18 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
             submitted_user = request.form.get("username", "")
             submitted_pass = request.form.get("password", "")
 
-            if verify_password(submitted_user, submitted_pass):
+            identity = authenticate_user(submitted_user, submitted_pass, auth_config)
+            if identity and (
+                identity["account_type"] == "admin"
+                or identity.get("tenant_id") in active_tenant_ids
+            ):
+                session.clear()
                 session["authenticated"] = True
-                session["username"] = submitted_user
+                session["username"] = identity["username"]
+                session["account_type"] = identity["account_type"]
+                session["tenant_id"] = identity.get("tenant_id")
+                if identity["account_type"] == "tenant":
+                    return redirect(f"/tenants/{identity['tenant_id']}/overview")
                 return redirect("/")
             else:
                 error_message = "用户名或密码错误"
@@ -2760,33 +2759,18 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
     app.layout = html.Div([
         # URL 路由
         dcc.Location(id="url", refresh=False),
-        dcc.Store(id="tenant-context", data=default_tenant_id),
+        dcc.Store(id="tenant-context"),
 
-        # 侧边栏容器（由路由回调重新渲染以同步 active 态）
-        html.Div(
-            create_sidebar(f"/tenants/{default_tenant_id}/overview", default_tenant_id),
-            id="sidebar-container",
-        ),
+        # 首屏只返回无数据外壳，身份和租户由受保护的路由回调填充。
+        html.Div(id="sidebar-container"),
 
         # 主区域
         html.Div([
             # 顶栏容器（由路由回调重新渲染面包屑）
-            html.Div(
-                create_topbar(
-                    auth_config,
-                    f"/tenants/{default_tenant_id}/overview",
-                    default_tenant_id,
-                    tenant_rows,
-                ),
-                id="topbar-container",
-            ),
+            html.Div(id="topbar-container"),
 
             # 内容区
-            html.Div(
-                create_overview_page(storage, default_tenant_id),
-                id="page-content",
-                className="content-area",
-            ),
+            html.Div(id="page-content", className="content-area"),
         ], className="main-area"),
     ], className="app-shell")
 
@@ -2823,6 +2807,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         start_datetime, end_datetime, selected_domain, selected_project, n_intervals, tenant_id
     ):
         """SQL 层聚合 + 构造全部图表（不再加载全量原始记录）"""
+        tenant_id = resolve_tenant_scope(tenant_id)
         # 解析日期时间字符串，统一按 Asia/Shanghai 时区解释
         def parse_dt(value, end_of_day=False):
             if not value:
@@ -3073,6 +3058,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True
     )
     def update_time_range(n_24h, n_7d, n_30d, n_custom, tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
         ctx = dash.callback_context
         if not ctx.triggered:
             return dash.no_update, dash.no_update, "time-range-btn", "time-range-btn", "time-range-btn active", "time-range-btn"
@@ -3110,6 +3096,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True,
     )
     def filter_domains_by_project(selected_project, tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
         proj = selected_project if selected_project and selected_project != "all" else None
         project_domains = storage.get_domains(project=proj, tenant_id=tenant_id)
         options = [{"label": "全部域名", "value": "all"}] + [
@@ -3125,6 +3112,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True,
     )
     def refresh_domains_table(selected_project, tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
         proj = selected_project if selected_project and selected_project != "all" else None
         pairs = storage.get_domain_project_pairs(project=proj, tenant_id=tenant_id)
         return _build_domain_rows(pairs)
@@ -3148,6 +3136,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True,
     )
     def update_overview_range(n_d, n_w, n_m, tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
         ctx = dash.callback_context
         btn = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else "overview-range-week"
         key_map = {
@@ -3188,6 +3177,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True,
     )
     def refresh_report(month_str, project_val, tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
         return _build_report_content(storage, tenant_id, month_str, project_val)
 
     # 月度报告：客户端触发浏览器打印（另存为 PDF）
@@ -3211,6 +3201,11 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         prevent_initial_call=True,
     )
     def switch_tenant(tenant_id, pathname, current_tenant_id):
+        tenant_id = resolve_tenant_scope(tenant_id)
+        if not is_admin_session():
+            if not tenant_id or tenant_id == current_tenant_id:
+                return dash.no_update
+            return f"/tenants/{tenant_id}/overview"
         if not tenant_id or tenant_id == current_tenant_id:
             return dash.no_update
         parts = (pathname or "").strip("/").split("/")
@@ -3232,10 +3227,27 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
     )
     def render_page(pathname):
         pathname = unquote(pathname or "/")
-        tenant_id = default_tenant_id
+        admin_access = is_admin_session()
+        username = session.get("username")
+        tenant_id = resolve_tenant_scope(default_tenant_id)
         tenant_ids = {item["tenant_id"] for item in config_manager.list_tenants()}
 
-        if pathname == "/config":
+        if not admin_access and (pathname.startswith("/config") or pathname == "/config-audit"):
+            page = html.Div(
+                [
+                    create_page_header(
+                        "仅限管理员",
+                        "当前账号只能查看绑定租户的数据，不能访问配置与审计功能。",
+                    ),
+                    html.A(
+                        "返回租户概览",
+                        href=f"/tenants/{tenant_id}/overview",
+                        className="config-button primary",
+                    ),
+                ],
+                className="tenant-version-card",
+            )
+        elif pathname == "/config":
             page = create_tenant_list_page(config_manager)
         elif pathname == "/config-audit":
             page = create_config_audit_page(config_manager)
@@ -3256,12 +3268,23 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
                     )
             else:
                 if len(parts) >= 3 and parts[0] == "tenants":
-                    tenant_id = parts[1]
+                    tenant_id = resolve_tenant_scope(parts[1])
                     page_key = parts[2]
                 else:
                     # 旧链接继续可访问，但只能映射到明确的默认租户。
                     page_key = parts[-1] if parts and parts[-1] else "overview"
-                if tenant_id not in tenant_ids:
+                if not admin_access and page_key not in {
+                    "overview", "analytics", "report", "domains"
+                }:
+                    page = html.Div(
+                        [
+                            create_page_header(
+                                "仅限管理员",
+                                "此功能属于 CDN 配置管理，普通账号不可访问。",
+                            )
+                        ]
+                    )
+                elif tenant_id not in tenant_ids:
                     page = html.Div([create_page_header("租户不存在", tenant_id)])
                 else:
                     tenant_domains = storage.get_domains(tenant_id=tenant_id)
@@ -3300,8 +3323,15 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
                     )
 
         tenants = config_manager.list_tenants()
-        sidebar = create_sidebar(pathname, tenant_id)
-        topbar = create_topbar(auth_config, pathname, tenant_id, tenants)
+        sidebar = create_sidebar(pathname, tenant_id, is_admin=admin_access)
+        topbar = create_topbar(
+            auth_config,
+            pathname,
+            tenant_id,
+            tenants if admin_access else None,
+            is_admin=admin_access,
+            username=username,
+        )
         return page, sidebar, topbar, tenant_id
 
     return app

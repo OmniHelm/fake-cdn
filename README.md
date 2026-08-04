@@ -149,10 +149,14 @@ python -m fake_cdn catchup --tenant-id hccl --start-date 2026-03-01 --end-date 2
 export DASHBOARD_USERNAME=admin
 export DASHBOARD_PASSWORD=<strong-password>
 export DASHBOARD_SECRET_KEY=<stable-random-secret>
+# 普通账号固定绑定 tenant_id，不具备配置管理权限
+export DASHBOARD_TENANT_USERS='{"hccl_user":{"password":"<user-password>","tenant_id":"hccl"}}'
 ```
 
 启用后，页面路由以及 Dash 布局、依赖和回调接口都会验证管理员登录态，配置保存
-接口不能在未登录状态下直接调用。未设置 `DASHBOARD_PASSWORD` 时仅适合本地开发。
+接口不能在未登录状态下直接调用。租户普通账号只能进入自身的概览、流量分析、
+月度报告和域名页面；服务端会忽略客户端提交的其他 `tenant_id`，并禁止配置写入。
+未设置任何密码时仅适合本地开发。
 
 ---
 
