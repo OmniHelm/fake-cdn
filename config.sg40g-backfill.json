@@ -1,18 +1,27 @@
 {
   "target": {
-    "bandwidth_gbps": 40.0,
-    "comment": "新加坡40Gbps"
+    "mode": "flux_window",
+    "total_flux": {
+      "value": 13.392,
+      "unit": "PB",
+      "base": 1000
+    },
+    "profile": "balanced_platform",
+    "random_seed": 20241222,
+    "comment": "新加坡 40 Gbps 持续 31 天，对应十进制总流量 13.392 PB"
   },
 
   "time": {
-    "start_date": "2024-12-22",
-    "duration_days": 31,
+    "start_datetime": "2024-12-22 00:00:00",
+    "end_datetime": "2025-01-21 23:55:00",
     "interval_seconds": 300,
+    "timezone": "Asia/Shanghai",
     "comment": "31天 (12月22日-1月21日), 5分钟间隔"
   },
 
   "dimensions": {
     "tenant_id": "770CDN26633384HCCL",
+    "project": "770CDN26633384HCCL",
     "domains": [
       "shoplazza.com",
       "shopline.com",
@@ -54,12 +63,17 @@
   },
 
   "realism": {
-    "cache_hit_rate": [0.85, 0.95],
-    "avg_object_size_kb": [200, 2048],
-    "origin_fail_rate": [0.0001, 0.0005],
-    "burst_probability": 0.0,
+    "cache_hit_rate": {"min": 0.85, "max": 0.95},
+    "avg_object_size_kb": {"min": 200, "max": 2048},
+    "origin_fail_rate": {"min": 0.0001, "max": 0.0005},
     "anomaly_probability": 0.001,
-    "comment": "调整后参数: 禁用突发流量"
+    "comment": "新加坡节点历史补推参数"
+  },
+
+  "deployment": {
+    "platform": "CUG",
+    "mode": "preview",
+    "comment": "历史补推配置仅用于本地展示和租户配置初始化"
   },
 
   "api": {

@@ -60,8 +60,8 @@ curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/depl
 # 生成模拟数据
 ./scripts/deploy.sh simulation
 
-# 后台启动 realtime + dashboard
-./scripts/deploy.sh full
+# 后台启动指定租户的 realtime + dashboard
+./scripts/deploy.sh --tenant-id LITTLEHCCL full
 
 # 停止后台服务
 ./scripts/deploy.sh stop
@@ -136,6 +136,7 @@ python -m fake_cdn dashboard --config ./config.json --port 8050
 ```bash
 python -m fake_cdn simulation --tenant-id hccl --dry-run
 python -m fake_cdn catchup --tenant-id hccl --start-date 2026-03-01 --end-date 2026-03-31
+./scripts/deploy.sh --tenant-id hccl realtime
 ```
 
 每个任务写入 `output/tenants/{tenant_id}/jobs/{job_id}/`，日志同时记录
@@ -203,7 +204,7 @@ fake-cdn/
 | catchup | `./scripts/deploy.sh catchup` | 补推历史数据 |
 | validate | `./scripts/deploy.sh validate` | 验证日志是否符合目标 |
 | dashboard | `./scripts/deploy.sh dashboard` | 启动可视化仪表板 |
-| full | `./scripts/deploy.sh full` | 后台启动 realtime + dashboard |
+| full | `./scripts/deploy.sh --tenant-id TENANT_ID full` | 后台启动指定租户 realtime + dashboard |
 | stop | `./scripts/deploy.sh stop` | 停止后台服务 |
 | status | `./scripts/deploy.sh status` | 查看数据和服务状态 |
 

@@ -46,7 +46,9 @@ class LogPusher:
         session.mount("https://", adapter)
         return session
 
-    def _log_api_request(self, log_entry: Dict, status_code: int, response_text: str, error: Optional[str] = None) -> None:
+    def _log_api_request(
+        self, log_entry: Dict, status_code: int, response_text: str, error: Optional[str] = None
+    ) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(self.api_log_file, "a", encoding="utf-8") as file:
             file.write(f"\n{'=' * 80}\n")
@@ -57,7 +59,9 @@ class LogPusher:
             else:
                 file.write(f"Response: HTTP {status_code} - {response_text}\n")
 
-    def push_single(self, log_entry: Dict, dry_run: bool = False, verbose: bool = False) -> Tuple[bool, str]:
+    def push_single(
+        self, log_entry: Dict, dry_run: bool = False, verbose: bool = False
+    ) -> Tuple[bool, str]:
         if dry_run:
             self.stats["success"] += 1
             return True, "dry-run mode"
@@ -113,7 +117,9 @@ class LogPusher:
 
         return results
 
-    def push_all(self, all_logs: Sequence[Dict], dry_run: bool = False, show_progress: bool = True) -> Dict:
+    def push_all(
+        self, all_logs: Sequence[Dict], dry_run: bool = False, show_progress: bool = True
+    ) -> Dict:
         batch_size = int(self.api_config["batch_size"])
         total_batches = (len(all_logs) + batch_size - 1) // batch_size if all_logs else 0
         print(f"[推送] 开始推送 {len(all_logs)} 条日志，分 {total_batches} 批")
@@ -121,7 +127,7 @@ class LogPusher:
 
         start_time = time.time()
         for offset in range(0, len(all_logs), batch_size):
-            batch = all_logs[offset: offset + batch_size]
+            batch = all_logs[offset : offset + batch_size]
             batch_num = offset // batch_size + 1
             self.push_batch(batch, dry_run)
 
@@ -198,7 +204,9 @@ class LocalSaver:
 
         resolved_interval = interval_seconds
         if resolved_interval is None and len(plan_points) >= 2:
-            resolved_interval = int((plan_points[1].timestamp_ms - plan_points[0].timestamp_ms) / 1000)
+            resolved_interval = int(
+                (plan_points[1].timestamp_ms - plan_points[0].timestamp_ms) / 1000
+            )
         resolved_interval = resolved_interval or 300
 
         with open(filepath, "w", encoding="utf-8") as file:

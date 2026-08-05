@@ -55,8 +55,7 @@ class TenantConfigStore:
     def _init_db(self) -> None:
         with self._get_conn() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS tenants (
                     tenant_id TEXT PRIMARY KEY,
                     display_name TEXT NOT NULL,
@@ -114,8 +113,7 @@ class TenantConfigStore:
                     ON config_audit(tenant_id, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_generation_jobs_tenant
                     ON generation_jobs(tenant_id, created_at DESC);
-                """
-            )
+                """)
 
     @staticmethod
     def validate(candidate: Dict) -> Dict:
@@ -171,9 +169,10 @@ class TenantConfigStore:
 
     def tenant_exists(self, tenant_id: str) -> bool:
         with self._get_conn() as conn:
-            return conn.execute(
-                "SELECT 1 FROM tenants WHERE tenant_id = ?", (tenant_id,)
-            ).fetchone() is not None
+            return (
+                conn.execute("SELECT 1 FROM tenants WHERE tenant_id = ?", (tenant_id,)).fetchone()
+                is not None
+            )
 
     def create_tenant(
         self,
@@ -256,26 +255,50 @@ class TenantConfigStore:
             remark=f"从 {path.name} 导入",
         )
 
-    def bootstrap(self, config_paths: Iterable[Union[Path, str]]) -> List[Dict]:
-        """仅导入尚不存在的租户；同名租户绝不自动覆盖或合并。"""
-        imported: List[Dict] = []
+    def bootstrap(
+        self,
+        config_paths: Iterable[Union[Path, str]],
+        *,
+        allowed_tenant_ids: Optional[Iterable[str]] = None,
+    ) -> List[Dict]:
+        """校验并导入选中租户；任一选中配置无效时不写入任何租户。"""
+        allowed = (
+            None
+            if allowed_tenant_ids is None
+            else {self.validate_tenant_id(value) for value in allowed_tenant_ids}
+        )
+        validated = []
+        errors = []
+
         for path in config_paths:
             resolved = Path(path).expanduser().resolve()
             if not resolved.exists():
                 continue
             try:
                 payload = json.loads(resolved.read_text(encoding="utf-8"))
-                tenant_id = self.validate(payload)["dimensions"]["tenant_id"]
-            except (OSError, json.JSONDecodeError, ConfigManagerError):
+                if not isinstance(payload, dict) or not isinstance(payload.get("dimensions"), dict):
+                    raise ConfigValidationError("配置根节点必须包含 dimensions 对象")
+                tenant_id = self.validate_tenant_id(payload["dimensions"].get("tenant_id"))
+                if allowed is not None and tenant_id not in allowed:
+                    continue
+                self.validate(payload)
+            except (OSError, json.JSONDecodeError, ConfigManagerError) as exc:
+                errors.append(f"{resolved.name}: {exc}")
                 continue
+            validated.append((resolved, tenant_id))
+
+        if errors:
+            raise ConfigManagerError("租户配置导入失败: " + "; ".join(errors))
+
+        imported: List[Dict] = []
+        for resolved, tenant_id in validated:
             if not self.tenant_exists(tenant_id):
                 imported.append(self.import_config_file(resolved))
         return imported
 
     def list_tenants(self) -> List[Dict]:
         with self._get_conn() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT t.*,
                        av.version_no AS active_version_no,
                        av.checksum AS active_checksum,
@@ -286,15 +309,12 @@ class TenantConfigStore:
                 LEFT JOIN config_versions av ON av.id = t.active_version_id
                 LEFT JOIN config_versions dv ON dv.id = t.latest_draft_id
                 ORDER BY t.updated_at DESC, t.tenant_id
-                """
-            ).fetchall()
+                """).fetchall()
         return [dict(row) for row in rows]
 
     def get_tenant(self, tenant_id: str) -> Dict:
         with self._get_conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM tenants WHERE tenant_id = ?", (tenant_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM tenants WHERE tenant_id = ?", (tenant_id,)).fetchone()
         if not row:
             raise ConfigManagerError(f"租户不存在: {tenant_id}")
         return dict(row)
@@ -308,7 +328,8 @@ class TenantConfigStore:
             if not tenant:
                 raise ConfigManagerError(f"租户不存在: {tenant_id}")
             version_id = (
-                tenant["latest_draft_id"] if prefer_draft and tenant["latest_draft_id"]
+                tenant["latest_draft_id"]
+                if prefer_draft and tenant["latest_draft_id"]
                 else tenant["active_version_id"]
             )
             if not version_id:

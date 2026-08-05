@@ -89,7 +89,9 @@ class RealtimeScheduler:
             if payload.get("plan_id") == self.plan_id:
                 print(f"[计划] 复用已有流量计划: {self.plan_file}")
                 return [
-                    FluxPlanPoint(timestamp_ms=int(item["timestamp_ms"]), flux_bytes=int(item["flux_bytes"]))
+                    FluxPlanPoint(
+                        timestamp_ms=int(item["timestamp_ms"]), flux_bytes=int(item["flux_bytes"])
+                    )
                     for item in payload.get("points", [])
                 ]
 
@@ -121,7 +123,9 @@ class RealtimeScheduler:
         next_time = aligned + timedelta(seconds=interval)
         wait_seconds = (next_time - now).total_seconds()
         if wait_seconds > 0:
-            print(f"[等待] 下次执行时间: {next_time.strftime('%Y-%m-%d %H:%M:%S %Z')} (等待 {wait_seconds:.1f} 秒)")
+            print(
+                f"[等待] 下次执行时间: {next_time.strftime('%Y-%m-%d %H:%M:%S %Z')} (等待 {wait_seconds:.1f} 秒)"
+            )
             time.sleep(wait_seconds)
 
     def run_once(self, dry_run: bool = False) -> bool:
@@ -134,7 +138,9 @@ class RealtimeScheduler:
 
         plan_point = self.plan_index.get(timestamp_ms)
         if plan_point is None:
-            print(f"[完成] 当前时间点 {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 不在配置窗口内")
+            print(
+                f"[完成] 当前时间点 {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 不在配置窗口内"
+            )
             return False
 
         print(f"[执行] 推送 {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')} 的日志")
@@ -151,7 +157,9 @@ class RealtimeScheduler:
             self.state["pushed_timestamps"].append(timestamp_ms)
             self.state["pushed_timestamps"] = sorted(set(self.state["pushed_timestamps"]))
             self._save_state()
-            print(f"[成功] 推送 {result['success']} 条日志，时间点流量 {plan_point.flux_bytes:,} Byte")
+            print(
+                f"[成功] 推送 {result['success']} 条日志，时间点流量 {plan_point.flux_bytes:,} Byte"
+            )
             return True
 
         print(f"[失败] 推送失败，成功 {result['success']} 条，失败 {result['failed']} 条")
@@ -159,7 +167,9 @@ class RealtimeScheduler:
 
     def run_forever(self, dry_run: bool = False, end_datetime: Optional[datetime] = None) -> None:
         print("[启动] 实时调度器启动")
-        print(f"[配置] 窗口: {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}")
+        print(
+            f"[配置] 窗口: {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}"
+        )
         print(f"[配置] 粒度: {self.config['time']['interval_seconds']} 秒")
         if end_datetime:
             print(f"[配置] 结束时间: {end_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -191,7 +201,9 @@ class RealtimeScheduler:
 class CatchupScheduler:
     """补推指定时间窗口的数据。"""
 
-    def __init__(self, config: Dict, start_datetime: Optional[str] = None, end_datetime: Optional[str] = None):
+    def __init__(
+        self, config: Dict, start_datetime: Optional[str] = None, end_datetime: Optional[str] = None
+    ):
         self.base_config = normalize_config(config)
         self.timezone = parse_timezone(self.base_config["time"]["timezone"])
         self.output_dir = get_output_dir(self.base_config)
@@ -200,7 +212,9 @@ class CatchupScheduler:
         start_dt = (
             parse_datetime_in_timezone(start_datetime, self.timezone)
             if start_datetime
-            else parse_datetime_in_timezone(self.base_config["time"]["start_datetime"], self.timezone)
+            else parse_datetime_in_timezone(
+                self.base_config["time"]["start_datetime"], self.timezone
+            )
         )
         end_dt = (
             parse_datetime_in_timezone(end_datetime, self.timezone)
@@ -217,7 +231,9 @@ class CatchupScheduler:
 
     def run(self, dry_run: bool = False) -> Dict:
         print("[补推] 开始补推数据")
-        print(f"[时间] {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}")
+        print(
+            f"[时间] {self.config['time']['start_datetime']} ~ {self.config['time']['end_datetime']}"
+        )
 
         logs, stats = self.generator.generate_window_logs()
         if self.config["mode"].get("save_local", True):
@@ -227,7 +243,9 @@ class CatchupScheduler:
                 db_path=self.config.get("_runtime", {}).get("log_db_path"),
             )
             LocalSaver.save_stats(stats, self.output_dir, "stats.json")
-            LocalSaver.save_flux_curve(self.generator.generate_window_plan(), self.output_dir, "flux_curve.csv")
+            LocalSaver.save_flux_curve(
+                self.generator.generate_window_plan(), self.output_dir, "flux_curve.csv"
+            )
 
         self.pusher.push_all(logs, dry_run, show_progress=True)
         return stats

@@ -92,9 +92,7 @@ def test_tenant_user_login_has_neutral_initial_layout(tmp_path: Path, monkeypatc
         '{"alice":{"password":"alice-password","tenant_id":"LITTLEHCCL"}}',
     )
     monkeypatch.setenv("FAKE_CDN_DB_PATH", str(tmp_path / "logs.db"))
-    app = create_app(
-        config_path=str(config_path), config_db_path=str(tmp_path / "config.db")
-    )
+    app = create_app(config_path=str(config_path), config_db_path=str(tmp_path / "config.db"))
     client = app.server.test_client()
 
     response = client.post(

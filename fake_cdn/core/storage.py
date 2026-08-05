@@ -34,7 +34,9 @@ class CDNLogStorage:
             conn.execute("ALTER TABLE cdn_logs ADD COLUMN generation_job_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_project ON cdn_logs(project)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_project_time ON cdn_logs(project, start_time)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant_time ON cdn_logs(tenant_id, start_time)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant_time ON cdn_logs(tenant_id, start_time)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tenant_domain_time "
             "ON cdn_logs(tenant_id, domain, start_time)"
@@ -44,8 +46,7 @@ class CDNLogStorage:
             "ON cdn_logs(tenant_id, project, start_time)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tenant_job "
-            "ON cdn_logs(tenant_id, generation_job_id)"
+            "CREATE INDEX IF NOT EXISTS idx_tenant_job " "ON cdn_logs(tenant_id, generation_job_id)"
         )
         # 老数据回填：project 保留原语义；tenant_id 不从项目反推，避免错误合并租户。
         conn.execute("""
@@ -117,7 +118,8 @@ class CDNLogStorage:
             log.setdefault("generationJobId", None)
 
         with self._get_conn() as conn:
-            conn.executemany("""
+            conn.executemany(
+                """
                 INSERT INTO cdn_logs (
                     start_time, tenant_id, project, domain, country, region, interval,
                     bw, flux, bs_bw, bs_flux,
@@ -133,7 +135,9 @@ class CDNLogStorage:
                     :bs_http_code_2xx, :bs_http_code_3xx, :bs_http_code_4xx, :bs_http_code_5xx,
                     :configVersionId, :generationJobId
                 )
-            """, logs)
+            """,
+                logs,
+            )
 
         print(f"[存储] 已插入 {len(logs)} 条日志到 SQLite")
 
@@ -225,8 +229,7 @@ class CDNLogStorage:
     def get_projects(self, tenant_id: Optional[str] = None) -> List[str]:
         """获取租户内的项目列表。"""
         query = (
-            "SELECT DISTINCT project FROM cdn_logs "
-            "WHERE project IS NOT NULL AND project != ''"
+            "SELECT DISTINCT project FROM cdn_logs " "WHERE project IS NOT NULL AND project != ''"
         )
         params = []
         if tenant_id:
@@ -316,7 +319,7 @@ class CDNLogStorage:
         domain: Optional[str] = None,
         project: Optional[str] = None,
         tenant_id: Optional[str] = None,
-        interval_ms: int = 300000  # 默认5分钟
+        interval_ms: int = 300000,  # 默认5分钟
     ) -> List[Dict]:
         """按时间聚合数据（用于图表）"""
         query = """
@@ -375,7 +378,7 @@ class CDNLogStorage:
         end_time: Optional[int] = None,
         project: Optional[str] = None,
         tenant_id: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
     ) -> List[Dict]:
         """按域名聚合数据（用于排行榜）"""
         query = """
@@ -438,6 +441,7 @@ def get_default_storage() -> CDNLogStorage:
         return CDNLogStorage(custom_db_path)
 
     from pathlib import Path
+
     project_root = Path(__file__).parent.parent.parent
     db_path = project_root / "output" / "cdn_logs.db"
     return CDNLogStorage(str(db_path))

@@ -111,6 +111,8 @@ show_help() {
     echo "选项:"
     echo "  -h, --help    显示帮助信息"
     echo "  --skip-deps   跳过依赖安装"
+    echo "  --tenant-id ID  使用配置数据库中该租户的已发布版本"
+    echo "  --config-db PATH 租户配置数据库路径 (默认: output/config.db)"
     echo ""
     echo "环境变量 (真实推送时需要):"
     echo "  CDN_API_ENDPOINT  API 端点地址"
@@ -120,10 +122,38 @@ show_help() {
     echo "  $0                    # 交互式菜单"
     echo "  $0 simulation         # 直接运行模拟模式"
     echo "  $0 dashboard          # 启动仪表板"
-    echo "  $0 full               # 后台启动 realtime + dashboard"
+    echo "  $0 --tenant-id hccl full # 后台启动指定租户 realtime + dashboard"
     echo "  $0 stop               # 停止后台服务"
     echo "  $0 --skip-deps status # 跳过依赖安装，查看状态"
     exit 0
+}
+
+require_tenant_id() {
+    if [ -z "$TENANT_ID" ]; then
+        error "realtime/full 模式必须通过 --tenant-id 指定租户"
+    fi
+}
+
+ensure_tenant_config() {
+    require_tenant_id
+    python3 -m fake_cdn tenant-migrate \
+        --tenant-id "$TENANT_ID" \
+        --config "$PROJECT_ROOT/config.json" \
+        --config-db "$CONFIG_DB"
+}
+
+read_effective_dry_run() {
+    if [ -n "$TENANT_ID" ]; then
+        python3 -c '
+import sys
+from fake_cdn.core.tenant_config import TenantConfigStore
+
+config = TenantConfigStore(sys.argv[2]).resolve_active(sys.argv[1])["config"]
+print(config["mode"]["dry_run"])
+' "$TENANT_ID" "$CONFIG_DB"
+    else
+        python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])"
+    fi
 }
 
 # 检查 Python 环境
@@ -232,7 +262,7 @@ check_push_config() {
     echo -e "${CYAN}推送配置:${NC}"
 
     # 读取 dry_run 状态
-    DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
+    DRY_RUN=$(read_effective_dry_run 2>/dev/null)
     if [ "$DRY_RUN" = "True" ]; then
         echo -e "  dry_run: ${GREEN}true${NC} (不会实际推送)"
     else
@@ -307,7 +337,7 @@ first_run_wizard() {
     separator
 
     # 2. 检查 API 配置
-    DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
+    DRY_RUN=$(read_effective_dry_run 2>/dev/null)
 
     echo -e "${YELLOW}[推送配置]${NC}"
     echo ""
@@ -429,17 +459,25 @@ run_mode() {
     case $choice in
         1|simulation)
             info "启动模拟模式..."
-            python3 -m fake_cdn simulation
+            if [ -n "$TENANT_ID" ]; then
+                ensure_tenant_config
+            fi
+            python3 -m fake_cdn simulation "${TENANT_ARGS[@]}"
             ;;
         2|realtime)
             info "启动实时模式..."
-            python3 -u -m fake_cdn realtime
+            ensure_tenant_config
+            python3 -u -m fake_cdn realtime "${TENANT_ARGS[@]}"
             ;;
         3|catchup)
             info "启动追赶模式..."
             read -p "开始日期 (YYYY-MM-DD): " start_date
             read -p "结束日期 (YYYY-MM-DD): " end_date
-            python3 -m fake_cdn catchup --start-date "$start_date" --end-date "$end_date"
+            if [ -n "$TENANT_ID" ]; then
+                ensure_tenant_config
+            fi
+            python3 -m fake_cdn catchup "${TENANT_ARGS[@]}" \
+                --start-date "$start_date" --end-date "$end_date"
             ;;
         4|validate)
             info "启动验证模式..."
@@ -465,7 +503,8 @@ Percentile95Validator.print_report(result)
         5|dashboard)
             info "启动仪表板..."
             info "访问地址: http://localhost:8050"
-            python3 -m fake_cdn dashboard
+            python3 -m fake_cdn dashboard \
+                --config "$PROJECT_ROOT/config.json" --config-db "$CONFIG_DB"
             ;;
         6|status)
             show_status
@@ -474,12 +513,13 @@ Percentile95Validator.print_report(result)
         7|full)
             info "启动完整模式 (realtime + dashboard)..."
             echo ""
+            ensure_tenant_config
 
             # 加载 .env 文件
             load_env
 
             # 检查 dry_run 状态和 API 配置
-            DRY_RUN=$(python3 -c "import json; print(json.load(open('config.json'))['mode']['dry_run'])" 2>/dev/null)
+            DRY_RUN=$(read_effective_dry_run 2>/dev/null)
             if [ "$DRY_RUN" = "False" ]; then
                 if [ -z "$CDN_API_ENDPOINT" ] || [ -z "$CDN_API_VIP" ]; then
                     error "dry_run=false 但未配置 API。请先在菜单中选择配置 API，或手动创建 .env 文件:
@@ -514,7 +554,9 @@ Percentile95Validator.print_report(result)
 
             # 启动 dashboard
             info "后台启动仪表板 (端口 8050)..."
-            nohup python3 -m fake_cdn dashboard > "$PROJECT_ROOT/output/dashboard.log" 2>&1 &
+            nohup python3 -m fake_cdn dashboard \
+                --config "$PROJECT_ROOT/config.json" --config-db "$CONFIG_DB" \
+                > "$PROJECT_ROOT/output/dashboard.log" 2>&1 &
             DASHBOARD_PID=$!
             sleep 2
 
@@ -531,7 +573,8 @@ Percentile95Validator.print_report(result)
             info "后台启动实时推送..."
             # 传递环境变量到后台进程
             nohup env CDN_API_ENDPOINT="$CDN_API_ENDPOINT" CDN_API_VIP="$CDN_API_VIP" \
-                python3 -u -m fake_cdn realtime -y > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
+                python3 -u -m fake_cdn realtime "${TENANT_ARGS[@]}" -y \
+                > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
             REALTIME_PID=$!
             sleep 2
 
@@ -605,6 +648,8 @@ main() {
     # 解析参数
     SKIP_DEPS=false
     MODE=""
+    TENANT_ID="${FAKE_CDN_TENANT_ID:-}"
+    CONFIG_DB="${FAKE_CDN_CONFIG_DB_PATH:-output/config.db}"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -615,12 +660,31 @@ main() {
                 SKIP_DEPS=true
                 shift
                 ;;
+            --tenant-id)
+                if [ -z "${2:-}" ]; then
+                    error "--tenant-id 缺少参数"
+                fi
+                TENANT_ID="$2"
+                shift 2
+                ;;
+            --config-db)
+                if [ -z "${2:-}" ]; then
+                    error "--config-db 缺少参数"
+                fi
+                CONFIG_DB="$2"
+                shift 2
+                ;;
             *)
                 MODE="$1"
                 shift
                 ;;
         esac
     done
+
+    TENANT_ARGS=()
+    if [ -n "$TENANT_ID" ]; then
+        TENANT_ARGS=(--tenant-id "$TENANT_ID" --config-db "$CONFIG_DB")
+    fi
 
     print_banner
 

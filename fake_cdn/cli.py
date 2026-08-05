@@ -114,7 +114,9 @@ def build_config_summary(config: Dict) -> Dict:
     slots = builder.build_slots()
     total_flux_bytes = TrafficTargetParser.parse_total_flux_bytes(config)
     total_seconds = len(slots) * config["time"]["interval_seconds"]
-    equivalent_avg_gbps = total_flux_bytes * 8 / total_seconds / 1_000_000_000 if total_seconds else 0.0
+    equivalent_avg_gbps = (
+        total_flux_bytes * 8 / total_seconds / 1_000_000_000 if total_seconds else 0.0
+    )
     return {
         "total_flux_bytes": total_flux_bytes,
         "total_flux_pb": decimal_pb(total_flux_bytes),
@@ -128,7 +130,9 @@ def build_config_summary(config: Dict) -> Dict:
 
 def print_config_summary(config: Dict) -> None:
     summary = build_config_summary(config)
-    print(f"[配置] 总流量目标: {summary['total_flux_pb']:.4f} PB ({summary['total_flux_tb']:.2f} TB)")
+    print(
+        f"[配置] 总流量目标: {summary['total_flux_pb']:.4f} PB ({summary['total_flux_tb']:.2f} TB)"
+    )
     print(f"[配置] 时间窗口: {config['time']['start_datetime']} ~ {config['time']['end_datetime']}")
     print(f"[配置] 时间粒度: {config['time']['interval_seconds']} 秒")
     print(f"[配置] 时间点数: {summary['total_points']}")
@@ -188,13 +192,17 @@ def mode_simulation(config: Dict, args) -> None:
             db_path=config.get("_runtime", {}).get("log_db_path"),
         )
         LocalSaver.save_stats(stats, output_dir, "stats.json")
-        LocalSaver.save_flux_curve(plan, output_dir, "flux_curve.csv", config["time"]["interval_seconds"])
+        LocalSaver.save_flux_curve(
+            plan, output_dir, "flux_curve.csv", config["time"]["interval_seconds"]
+        )
 
     print("\n[验证] 开始校验...")
     result = FluxWindowValidator.validate_logs(logs, config)
     FluxWindowValidator.print_report(result)
 
-    slot_gbps = [point.flux_bytes * 8 / config["time"]["interval_seconds"] / 1_000_000_000 for point in plan]
+    slot_gbps = [
+        point.flux_bytes * 8 / config["time"]["interval_seconds"] / 1_000_000_000 for point in plan
+    ]
     billing = BillingCalculator.calculate_95_billing(slot_gbps)
     BillingCalculator.print_billing_report(billing)
 
@@ -292,33 +300,35 @@ def mode_dashboard(config: Dict, args) -> None:
 
 
 def mode_tenant_migrate(args) -> None:
-    """显式导入 config*.json，并报告日志库中未配置的租户。"""
+    """导入主配置与日志库中的真实租户，并报告未映射租户。"""
     store = TenantConfigStore(args.config_db) if args.config_db else get_default_config_store()
-    root = Path(args.config).expanduser().resolve().parent
+    primary_config = Path(args.config).expanduser().resolve()
+    root = primary_config.parent
     candidates = sorted(root.glob("config*.json"))
-    imported_count = 0
-    failed_count = 0
-    for candidate in candidates:
-        try:
-            raw = json.loads(candidate.read_text(encoding="utf-8"))
-            tenant_id = store.validate(raw)["dimensions"]["tenant_id"]
-            existed = store.tenant_exists(tenant_id)
-            store.import_config_file(candidate)
-            if existed:
-                print(f"[跳过] {candidate.name}: {tenant_id} 已存在")
-            else:
-                imported_count += 1
-                print(f"[导入] {candidate.name}: {tenant_id}")
-        except (OSError, json.JSONDecodeError, ConfigManagerError) as exc:
-            failed_count += 1
-            print(f"[失败] {candidate.name}: {exc}")
-    print(f"[配置库] {store.db_path}")
-    print(
-        f"[扫描] {len(candidates)} 个配置文件，新导入 {imported_count} 个租户，"
-        f"失败 {failed_count} 个"
-    )
-    configured = {item["tenant_id"] for item in store.list_tenants()}
     log_tenants = set(get_default_storage().get_tenants())
+
+    try:
+        if args.tenant_id:
+            allowed_tenants = {store.validate_tenant_id(args.tenant_id)}
+        else:
+            primary_payload = json.loads(primary_config.read_text(encoding="utf-8"))
+            primary_tenant = store.validate(primary_payload)["dimensions"]["tenant_id"]
+            allowed_tenants = log_tenants | {primary_tenant}
+        imported = store.bootstrap(candidates, allowed_tenant_ids=allowed_tenants)
+    except (OSError, json.JSONDecodeError, ConfigManagerError) as exc:
+        print(f"[失败] {exc}")
+        sys.exit(1)
+
+    for item in imported:
+        print(f"[导入] {item['tenant_id']}: v{item['version_no']}")
+
+    print(f"[配置库] {store.db_path}")
+    print(f"[扫描] {len(candidates)} 个配置文件，新导入 {len(imported)} 个租户")
+    configured = {item["tenant_id"] for item in store.list_tenants()}
+    if args.tenant_id and args.tenant_id not in configured:
+        print(f"[失败] 找不到租户配置: {args.tenant_id}")
+        sys.exit(1)
+
     missing = sorted(log_tenants - configured)
     if missing:
         print("[待映射] 以下历史日志 tenant_id 尚无配置，系统不会自动合并：")
@@ -372,8 +382,7 @@ def mode_migrate(config: Dict, args) -> None:
 
 
 def print_banner() -> None:
-    print(
-        """
+    print("""
     ███████╗ █████╗ ██╗  ██╗███████╗     ██████╗██████╗ ███╗   ██╗
     ██╔════╝██╔══██╗██║ ██╔╝██╔════╝    ██╔════╝██╔══██╗████╗  ██║
     █████╗  ███████║█████╔╝ █████╗      ██║     ██║  ██║██╔██╗ ██║
@@ -382,8 +391,7 @@ def print_banner() -> None:
     ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝     ╚═════╝╚═════╝ ╚═╝  ╚═══╝
 
     CDN日志模拟系统 - 流量窗口推送版
-    """
-    )
+    """)
 
 
 def main() -> None:
@@ -415,17 +423,29 @@ def main() -> None:
         nargs="?",
         default="simulation",
         choices=[
-            "simulation", "realtime", "catchup", "validate", "dashboard", "migrate",
+            "simulation",
+            "realtime",
+            "catchup",
+            "validate",
+            "dashboard",
+            "migrate",
             "tenant-migrate",
         ],
         help="运行模式",
     )
-    parser.add_argument("--config", default="./config.json", help="配置文件路径 (默认: ./config.json)")
+    parser.add_argument(
+        "--config", default="./config.json", help="配置文件路径 (默认: ./config.json)"
+    )
     parser.add_argument("--tenant-id", help="从配置数据库加载该租户的已发布版本")
     parser.add_argument("--config-db", help="租户配置 SQLite 路径（默认: output/config.db）")
     parser.add_argument("--once", action="store_true", help="实时模式下只执行一次")
-    parser.add_argument("--start-datetime", help="补推模式: 开始时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)")
-    parser.add_argument("--end-datetime", help="补推/实时模式: 结束时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)")
+    parser.add_argument(
+        "--start-datetime", help="补推模式: 开始时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)"
+    )
+    parser.add_argument(
+        "--end-datetime",
+        help="补推/实时模式: 结束时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)",
+    )
     parser.add_argument("--start-date", help="补推模式快捷参数: 开始日期 (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="补推模式快捷参数: 结束日期 (YYYY-MM-DD)")
     parser.add_argument("--log-file", help="验证模式: 日志文件路径 (支持 .db / .jsonl)")

@@ -156,11 +156,11 @@ def stable_seed(*parts: object) -> int:
 
 
 def decimal_tb(value_bytes: int) -> float:
-    return value_bytes / float(1000 ** 4)
+    return value_bytes / float(1000**4)
 
 
 def decimal_pb(value_bytes: int) -> float:
-    return value_bytes / float(1000 ** 5)
+    return value_bytes / float(1000**5)
 
 
 def sample_range(rng: random.Random, value: object, default: Tuple[float, float]) -> float:
@@ -336,7 +336,9 @@ def normalize_config(config: Dict) -> Dict:
         raise ValueError("domains.weight 总和必须大于 0")
     dimensions["domains"] = normalized_domains
 
-    raw_regions = dimensions.get("regions") or [{"country": "cn", "region": "mainland_china", "weight": 1.0}]
+    raw_regions = dimensions.get("regions") or [
+        {"country": "cn", "region": "mainland_china", "weight": 1.0}
+    ]
     merged_regions: Dict[Tuple[str, str], float] = defaultdict(float)
     for item in raw_regions:
         if not isinstance(item, dict):
@@ -379,9 +381,7 @@ def normalize_config(config: Dict) -> Dict:
     deployment.setdefault("platform", "CUG")
     deployment.setdefault("mode", "preview")
     if deployment["mode"] not in ("preview", "push"):
-        raise ValueError(
-            f"deployment.mode 必须是 preview 或 push，收到 {deployment['mode']!r}"
-        )
+        raise ValueError(f"deployment.mode 必须是 preview 或 push，收到 {deployment['mode']!r}")
 
     mode = cfg.setdefault("mode", {})
     mode.setdefault("run_mode", "simulation")
@@ -482,9 +482,15 @@ class TrafficProfileLibrary:
         profile = copy.deepcopy(self._profiles[profile_name])
 
         realism = self.config["realism"]
-        profile.setdefault("cache_hit_rate", normalize_range(realism.get("cache_hit_rate"), (0.88, 0.95)))
-        profile.setdefault("avg_object_size_kb", normalize_range(realism.get("avg_object_size_kb"), (200, 2048)))
-        profile.setdefault("origin_fail_rate", normalize_range(realism.get("origin_fail_rate"), (0.0001, 0.0005)))
+        profile.setdefault(
+            "cache_hit_rate", normalize_range(realism.get("cache_hit_rate"), (0.88, 0.95))
+        )
+        profile.setdefault(
+            "avg_object_size_kb", normalize_range(realism.get("avg_object_size_kb"), (200, 2048))
+        )
+        profile.setdefault(
+            "origin_fail_rate", normalize_range(realism.get("origin_fail_rate"), (0.0001, 0.0005))
+        )
         profile.setdefault("weekend_multiplier", 1.0)
         return profile
 
@@ -576,7 +582,9 @@ class FluxCurveGenerator:
             day_factor = weekday_factor * month_edge_factor * day_noise[day_to_index[day_key]]
             slot_factor = self.profile_library.slot_factor(target_profile, slot)
             event_factor = self._event_factor(slot)
-            raw_weights.append(max(0.000001, day_factor * slot_factor * slot_noise[index] * event_factor))
+            raw_weights.append(
+                max(0.000001, day_factor * slot_factor * slot_noise[index] * event_factor)
+            )
 
         allocated_fluxes = allocate_integer_by_weights(self.total_flux_bytes, raw_weights)
         return [
@@ -686,17 +694,23 @@ class MetricsDerivator:
 
         bw_bits = int(flux_bytes * 8)
 
-        flux_splits = allocate_integer_by_weights(flux_bytes, [cache_hit_rate, 1.0 - cache_hit_rate])
+        flux_splits = allocate_integer_by_weights(
+            flux_bytes, [cache_hit_rate, 1.0 - cache_hit_rate]
+        )
         hit_flux_bytes, bs_flux_bytes = flux_splits[0], flux_splits[1]
         bs_bw_bits = int(bs_flux_bytes * 8)
 
         req_num = max(1, int(round(flux_bytes / avg_object_size_bytes)))
         req_splits = allocate_integer_by_weights(req_num, [cache_hit_rate, 1.0 - cache_hit_rate])
         hit_num, bs_num = req_splits[0], req_splits[1]
-        bs_fail_num = allocate_integer_by_weights(bs_num, [origin_fail_rate, 1.0 - origin_fail_rate])[0]
+        bs_fail_num = allocate_integer_by_weights(
+            bs_num, [origin_fail_rate, 1.0 - origin_fail_rate]
+        )[0]
 
         http_counts = self._allocate_http_codes(req_num, profile["http_code_weights"], rng)
-        origin_http_counts = self._allocate_http_codes(bs_num, profile["origin_http_code_weights"], rng)
+        origin_http_counts = self._allocate_http_codes(
+            bs_num, profile["origin_http_code_weights"], rng
+        )
 
         return {
             "bw": bw_bits,
@@ -719,7 +733,9 @@ class MetricsDerivator:
         }
 
     @staticmethod
-    def _allocate_http_codes(total: int, weight_ranges: Dict[str, Tuple[float, float]], rng: random.Random) -> List[int]:
+    def _allocate_http_codes(
+        total: int, weight_ranges: Dict[str, Tuple[float, float]], rng: random.Random
+    ) -> List[int]:
         if total <= 0:
             return [0, 0, 0, 0]
 
@@ -744,7 +760,9 @@ class AnomalyInjector:
         if metrics["req_num"] <= 0:
             return metrics
 
-        dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=parse_timezone(self.config["time"]["timezone"]))
+        dt = datetime.fromtimestamp(
+            timestamp_ms / 1000, tz=parse_timezone(self.config["time"]["timezone"])
+        )
         anomaly_probability = float(self.realism.get("anomaly_probability", 0.001))
 
         # 1. 凌晨维护窗口：轻微提升客户端 5xx
@@ -756,7 +774,9 @@ class AnomalyInjector:
         # 2. 源站故障：回源失败与回源 5xx 升高
         if rng.random() < anomaly_probability:
             fail_rate = rng.uniform(0.25, 0.65)
-            metrics["bs_fail_num"] = allocate_integer_by_weights(metrics["bs_num"], [fail_rate, 1.0 - fail_rate])[0]
+            metrics["bs_fail_num"] = allocate_integer_by_weights(
+                metrics["bs_num"], [fail_rate, 1.0 - fail_rate]
+            )[0]
             origin_success = max(0, metrics["bs_num"] - metrics["bs_fail_num"])
             metrics["bs_http_code_5xx"] = metrics["bs_fail_num"]
             remaining = allocate_integer_by_weights(origin_success, [0.92, 0.03, 0.05])
@@ -767,11 +787,15 @@ class AnomalyInjector:
         # 3. 缓存刷新：命中率短时下降，回源流量提升，但总流量保持不变
         if rng.random() < 0.008:
             new_hit_rate = rng.uniform(0.55, 0.75)
-            req_split = allocate_integer_by_weights(metrics["req_num"], [new_hit_rate, 1.0 - new_hit_rate])
+            req_split = allocate_integer_by_weights(
+                metrics["req_num"], [new_hit_rate, 1.0 - new_hit_rate]
+            )
             metrics["hit_num"] = req_split[0]
             metrics["bs_num"] = req_split[1]
 
-            flux_split = allocate_integer_by_weights(metrics["flux"], [new_hit_rate, 1.0 - new_hit_rate])
+            flux_split = allocate_integer_by_weights(
+                metrics["flux"], [new_hit_rate, 1.0 - new_hit_rate]
+            )
             metrics["hit_flux"] = flux_split[0]
             metrics["bs_flux"] = flux_split[1]
             metrics["bs_bw"] = metrics["bs_flux"] * 8
@@ -808,7 +832,9 @@ class MultiDimensionDistributor:
         self.regions = self.config["dimensions"]["regions"]
 
     def distribute_flux(self, total_flux_bytes: int, timestamp_ms: int) -> List[Dict]:
-        dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=parse_timezone(self.config["time"]["timezone"]))
+        dt = datetime.fromtimestamp(
+            timestamp_ms / 1000, tz=parse_timezone(self.config["time"]["timezone"])
+        )
 
         domain_weights = []
         for domain in self.domains:
@@ -887,8 +913,8 @@ class CDNLogGenerator:
                 {
                     "tenantId": self.config["dimensions"]["tenant_id"],
                     "project": self.config["dimensions"].get("project")
-                        or self.config["dimensions"].get("tenant_id")
-                        or "默认",
+                    or self.config["dimensions"].get("tenant_id")
+                    or "默认",
                     "configVersionId": runtime.get("config_version_id"),
                     "generationJobId": runtime.get("generation_job_id"),
                     "start_time": plan_point.timestamp_ms,
@@ -966,14 +992,25 @@ class CDNLogGenerator:
             "actual_total_flux_bytes": actual_total_flux_bytes,
             "actual_total_flux_pb": decimal_pb(actual_total_flux_bytes),
             "actual_total_flux_tb": decimal_tb(actual_total_flux_bytes),
-            "equivalent_avg_gbps": actual_total_flux_bytes * 8 / (len(plan) * interval_seconds) / 1_000_000_000,
+            "equivalent_avg_gbps": actual_total_flux_bytes
+            * 8
+            / (len(plan) * interval_seconds)
+            / 1_000_000_000,
             "p50_gbps": _percentile(slot_gbps, 0.50),
             "p95_gbps": _percentile(slot_gbps, 0.95),
             "p99_gbps": _percentile(slot_gbps, 0.99),
             "max_gbps": max(slot_gbps),
             "min_gbps": min(slot_gbps),
-            "weekday_avg_tb": decimal_tb(int(sum(weekday_values) / len(weekday_values))) if weekday_values else 0.0,
-            "weekend_avg_tb": decimal_tb(int(sum(weekend_values) / len(weekend_values))) if weekend_values else 0.0,
+            "weekday_avg_tb": (
+                decimal_tb(int(sum(weekday_values) / len(weekday_values)))
+                if weekday_values
+                else 0.0
+            ),
+            "weekend_avg_tb": (
+                decimal_tb(int(sum(weekend_values) / len(weekend_values)))
+                if weekend_values
+                else 0.0
+            ),
             "peak_to_valley_ratio": (max(slot_gbps) / max(min(slot_gbps), 0.000001)),
             "top_domains": domain_shares[:10],
         }

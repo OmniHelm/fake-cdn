@@ -1429,7 +1429,8 @@ def create_config_audit_page(manager: TenantConfigStore, tenant_id: str = None):
                             html.H2("配置审计日志"),
                             html.P(
                                 f"追踪租户 {tenant_id} 的草稿、发布、回滚与生成任务。"
-                                if tenant_id else "追踪所有租户的配置与生成操作。"
+                                if tenant_id
+                                else "追踪所有租户的配置与生成操作。"
                             ),
                         ]
                     )
