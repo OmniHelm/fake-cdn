@@ -1,0 +1,29 @@
+[Unit]
+Description=Fake CDN generation task worker
+After=network-online.target fake-cdn-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fake-cdn
+Group=fake-cdn
+WorkingDirectory=/opt/fake-cdn
+Environment=PYTHONUNBUFFERED=1
+Environment=FAKE_CDN_PROJECT_ROOT=/opt/fake-cdn
+Environment=FAKE_CDN_CONFIG_PATH=/opt/fake-cdn/config.json
+Environment=FAKE_CDN_CONFIG_DB_PATH=/opt/fake-cdn/output/config.db
+Environment=FAKE_CDN_DB_PATH=/opt/fake-cdn/output/cdn_logs.db
+ExecStart=/bin/bash -lc 'set -ae; test ! -f .env || source .env; exec venv/bin/python -u -m fake_cdn worker --config-db /opt/fake-cdn/output/config.db --max-realtime 1 --max-batch 1'
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/fake-cdn/output
+
+[Install]
+WantedBy=multi-user.target

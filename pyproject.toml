@@ -38,6 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 dashboard = [
     "dash>=2.14.0",
+    "gunicorn>=22.0.0; platform_system != 'Windows'",
     "plotly>=5.18.0",
     "pandas>=2.0.0",
 ]

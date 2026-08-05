@@ -1,0 +1,31 @@
+[Unit]
+Description=Fake CDN administrator dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fake-cdn
+Group=fake-cdn
+WorkingDirectory=/opt/fake-cdn
+Environment=PYTHONUNBUFFERED=1
+Environment=FAKE_CDN_PROJECT_ROOT=/opt/fake-cdn
+Environment=FAKE_CDN_CONFIG_PATH=/opt/fake-cdn/config.json
+Environment=FAKE_CDN_CONFIG_DB_PATH=/opt/fake-cdn/output/config.db
+Environment=FAKE_CDN_DB_PATH=/opt/fake-cdn/output/cdn_logs.db
+ExecStartPre=/bin/bash -lc 'set -ae; test ! -f .env || source .env; if { test -n "$${DASHBOARD_PASSWORD:-}" || test -n "$${DASHBOARD_USERS:-}" || test -n "$${DASHBOARD_TENANT_USERS:-}"; } && test -z "$${DASHBOARD_SECRET_KEY:-}"; then echo "DASHBOARD_SECRET_KEY is required when authentication is enabled" >&2; exit 1; fi'
+ExecStartPre=/opt/fake-cdn/venv/bin/python -m fake_cdn tenant-migrate --config /opt/fake-cdn/config.json --config-db /opt/fake-cdn/output/config.db
+ExecStart=/bin/bash -lc 'set -ae; test ! -f .env || source .env; exec venv/bin/gunicorn --bind 0.0.0.0:8050 --workers 2 --threads 2 --timeout 120 --preload fake_cdn.dashboard.wsgi:application'
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/fake-cdn/output
+
+[Install]
+WantedBy=multi-user.target

@@ -104,9 +104,11 @@ show_help() {
     echo "  catchup       快速补推历史数据"
     echo "  validate      验证已生成的日志"
     echo "  dashboard     启动可视化仪表板"
+    echo "  worker        启动管理员任务队列 Worker"
     echo "  status        查看数据状态"
-    echo "  full          完整模式 (realtime + dashboard 后台启动)"
+    echo "  full          完整模式 (dashboard + worker 后台启动)"
     echo "  stop          停止后台服务"
+    echo "  config        配置 API 推送"
     echo ""
     echo "选项:"
     echo "  -h, --help    显示帮助信息"
@@ -122,7 +124,7 @@ show_help() {
     echo "  $0                    # 交互式菜单"
     echo "  $0 simulation         # 直接运行模拟模式"
     echo "  $0 dashboard          # 启动仪表板"
-    echo "  $0 --tenant-id hccl full # 后台启动指定租户 realtime + dashboard"
+    echo "  $0 full                # 后台启动 dashboard + worker"
     echo "  $0 stop               # 停止后台服务"
     echo "  $0 --skip-deps status # 跳过依赖安装，查看状态"
     exit 0
@@ -130,8 +132,18 @@ show_help() {
 
 require_tenant_id() {
     if [ -z "$TENANT_ID" ]; then
-        error "realtime/full 模式必须通过 --tenant-id 指定租户"
+        error "realtime 模式必须通过 --tenant-id 指定租户"
     fi
+}
+
+read_realtime_end_datetime() {
+    python3 -c '
+import sys
+from fake_cdn.core.tenant_config import TenantConfigStore
+
+config = TenantConfigStore(sys.argv[2]).resolve_active(sys.argv[1])["config"]
+print(config["time"]["end_datetime"])
+' "$TENANT_ID" "$CONFIG_DB"
 }
 
 ensure_tenant_config() {
@@ -283,6 +295,52 @@ check_push_config() {
 }
 
 # 显示数据状态
+load_managed_pids() {
+    DASHBOARD_PID=""
+    WORKER_PID=""
+    local pid_file="$PROJECT_ROOT/.fake-cdn.pid"
+    if [ ! -f "$pid_file" ]; then
+        return 0
+    fi
+
+    # 兼容旧脚本只写入一个 Dashboard PID 的格式，同时拒绝执行文件内容。
+    local first_line key value
+    first_line=$(head -n 1 "$pid_file" 2>/dev/null || true)
+    if [[ "$first_line" =~ ^[0-9]+$ ]]; then
+        DASHBOARD_PID="$first_line"
+        return 0
+    fi
+    while IFS='=' read -r key value; do
+        case "$key" in
+            DASHBOARD_PID|WORKER_PID)
+                if [[ "$value" =~ ^[0-9]+$ ]]; then
+                    if [ "$key" = "DASHBOARD_PID" ]; then
+                        DASHBOARD_PID="$value"
+                    else
+                        WORKER_PID="$value"
+                    fi
+                fi
+                ;;
+        esac
+    done < "$pid_file"
+}
+
+is_managed_process() {
+    local pid="$1"
+    local role="$2"
+    local command_line
+    if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+    command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+    if [ "$role" = "dashboard" ]; then
+        [[ "$command_line" == *"fake_cdn dashboard"* || \
+           "$command_line" == *"fake_cdn.dashboard.wsgi"* ]]
+        return $?
+    fi
+    [[ "$command_line" == *"fake_cdn worker"* ]]
+}
+
 show_status() {
     echo ""
     echo -e "${CYAN}数据状态:${NC}"
@@ -309,6 +367,70 @@ else:
         echo -e "  数据库: ${YELLOW}未创建${NC}"
         echo "  提示: 运行 simulation 生成测试数据"
     fi
+
+    echo ""
+    echo -e "${CYAN}服务状态:${NC}"
+    load_managed_pids
+    if is_managed_process "${DASHBOARD_PID:-}" dashboard; then
+        echo -e "  Dashboard: ${GREEN}运行中${NC} (PID: $DASHBOARD_PID)"
+    else
+        echo -e "  Dashboard: ${YELLOW}未运行${NC}"
+    fi
+    if is_managed_process "${WORKER_PID:-}" worker; then
+        echo -e "  Worker: ${GREEN}运行中${NC} (PID: $WORKER_PID)"
+    else
+        echo -e "  Worker: ${YELLOW}未运行${NC}"
+    fi
+}
+
+stop_managed_services() {
+    local pid_file="$PROJECT_ROOT/.fake-cdn.pid"
+    if [ ! -f "$pid_file" ]; then
+        return
+    fi
+    load_managed_pids
+    local managed_pids=()
+    if is_managed_process "${WORKER_PID:-}" worker; then
+        kill "$WORKER_PID" 2>/dev/null || true
+        managed_pids+=("$WORKER_PID")
+    elif [ -n "${WORKER_PID:-}" ]; then
+        warn "跳过无效 Worker PID: $WORKER_PID"
+    fi
+    if is_managed_process "${DASHBOARD_PID:-}" dashboard; then
+        kill "$DASHBOARD_PID" 2>/dev/null || true
+        managed_pids+=("$DASHBOARD_PID")
+    elif [ -n "${DASHBOARD_PID:-}" ]; then
+        warn "跳过无效 Dashboard PID: $DASHBOARD_PID"
+    fi
+    for _ in $(seq 1 300); do
+        local running=false
+        for pid in "${managed_pids[@]}"; do
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                running=true
+            fi
+        done
+        if [ "$running" = false ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    rm -f "$pid_file"
+}
+
+port_8050_in_use() {
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti:8050 >/dev/null 2>&1
+        return $?
+    fi
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -n tcp 8050 >/dev/null 2>&1
+        return $?
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn | awk 'NR > 1 && $4 ~ /(^|:)8050$/ { found = 1 } END { exit(found ? 0 : 1) }'
+        return $?
+    fi
+    return 1
 }
 
 # 首次运行向导
@@ -369,12 +491,47 @@ load_env() {
 # 保存环境变量到 .env
 save_env() {
     ENV_FILE="$PROJECT_ROOT/.env"
-    cat > "$ENV_FILE" << EOF
-# Fake CDN 环境变量配置
-export CDN_API_ENDPOINT="$CDN_API_ENDPOINT"
-export CDN_API_VIP="$CDN_API_VIP"
-EOF
-    chmod 600 "$ENV_FILE"
+    CDN_API_ENDPOINT="${CDN_API_ENDPOINT:-}" CDN_API_VIP="${CDN_API_VIP:-}" \
+        python3 - "$ENV_FILE" <<'PY'
+import os
+import re
+import shlex
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+pattern = re.compile(r"^\s*(?:export\s+)?(?:CDN_API_ENDPOINT|CDN_API_VIP)\s*=")
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+preserved = [
+    line
+    for line in lines
+    if not pattern.match(line) and line.strip() != "# Fake CDN API 环境变量"
+]
+if preserved and preserved[-1]:
+    preserved.append("")
+preserved.extend(
+    [
+        "# Fake CDN API 环境变量",
+        f"export CDN_API_ENDPOINT={shlex.quote(os.environ['CDN_API_ENDPOINT'])}",
+        f"export CDN_API_VIP={shlex.quote(os.environ['CDN_API_VIP'])}",
+    ]
+)
+
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary_path = tempfile.mkstemp(prefix=".env.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write("\n".join(preserved).rstrip() + "\n")
+    os.chmod(temporary_path, 0o600)
+    os.replace(temporary_path, path)
+except Exception:
+    try:
+        os.unlink(temporary_path)
+    except FileNotFoundError:
+        pass
+    raise
+PY
 }
 
 # 配置 API
@@ -389,7 +546,10 @@ configure_api() {
     load_env
 
     # API Endpoint
-    current_endpoint="${CDN_API_ENDPOINT:-未配置}"
+    current_endpoint="未配置"
+    if [ -n "${CDN_API_ENDPOINT:-}" ]; then
+        current_endpoint="已配置"
+    fi
     echo -e "当前 Endpoint: ${YELLOW}$current_endpoint${NC}"
     echo -n "API Endpoint (留空保持不变): "
     read -r api_endpoint
@@ -399,7 +559,10 @@ configure_api() {
     fi
 
     # API VIP
-    current_vip="${CDN_API_VIP:-未配置}"
+    current_vip="未配置"
+    if [ -n "${CDN_API_VIP:-}" ]; then
+        current_vip="已配置"
+    fi
     echo -e "当前 VIP: ${YELLOW}$current_vip${NC}"
     echo -n "API VIP (留空保持不变): "
     read -r api_vip
@@ -444,10 +607,11 @@ show_menu() {
     echo "  3) catchup     - 追赶模式 (补推历史数据)"
     echo "  4) validate    - 验证模式 (验证生成的日志)"
     echo "  5) dashboard   - 启动仪表板 (可视化监控)"
-    echo "  6) status      - 查看状态"
-    echo -e "  ${CYAN}7) full         - 完整模式 (realtime + dashboard 后台启动)${NC}"
-    echo -e "  ${RED}8) stop         - 停止后台服务${NC}"
-    echo -e "  ${YELLOW}9) config       - 配置 API 推送${NC}"
+    echo "  6) worker      - 启动管理员任务队列 Worker"
+    echo "  7) status      - 查看状态"
+    echo -e "  ${CYAN}8) full         - 完整模式 (dashboard + worker 后台启动)${NC}"
+    echo -e "  ${RED}9) stop         - 停止后台服务${NC}"
+    echo -e "  ${YELLOW}10) config      - 配置 API 推送${NC}"
     echo "  0) exit        - 退出"
     echo ""
 }
@@ -467,7 +631,9 @@ run_mode() {
         2|realtime)
             info "启动实时模式..."
             ensure_tenant_config
-            python3 -u -m fake_cdn realtime "${TENANT_ARGS[@]}"
+            realtime_end=$(read_realtime_end_datetime)
+            python3 -u -m fake_cdn realtime "${TENANT_ARGS[@]}" \
+                --end-datetime "$realtime_end"
             ;;
         3|catchup)
             info "启动追赶模式..."
@@ -503,64 +669,51 @@ Percentile95Validator.print_report(result)
         5|dashboard)
             info "启动仪表板..."
             info "访问地址: http://localhost:8050"
+            load_env
             python3 -m fake_cdn dashboard \
                 --config "$PROJECT_ROOT/config.json" --config-db "$CONFIG_DB"
             ;;
-        6|status)
+        6|worker)
+            info "启动任务 Worker..."
+            load_env
+            python3 -u -m fake_cdn worker --config-db "$CONFIG_DB"
+            ;;
+        7|status)
             show_status
             check_push_config
             ;;
-        7|full)
-            info "启动完整模式 (realtime + dashboard)..."
+        8|full)
+            info "启动完整模式 (dashboard + worker)..."
             echo ""
-            ensure_tenant_config
-
-            # 加载 .env 文件
             load_env
-
-            # 检查 dry_run 状态和 API 配置
-            DRY_RUN=$(read_effective_dry_run 2>/dev/null)
-            if [ "$DRY_RUN" = "False" ]; then
-                if [ -z "$CDN_API_ENDPOINT" ] || [ -z "$CDN_API_VIP" ]; then
-                    error "dry_run=false 但未配置 API。请先在菜单中选择配置 API，或手动创建 .env 文件:
-  echo 'CDN_API_ENDPOINT=\"your_endpoint\"' > $PROJECT_ROOT/.env
-  echo 'CDN_API_VIP=\"your_vip\"' >> $PROJECT_ROOT/.env"
-                fi
-                echo -e "  API: ${GREEN}$CDN_API_ENDPOINT${NC}"
+            if { [ -n "${DASHBOARD_PASSWORD:-}" ] || [ -n "${DASHBOARD_USERS:-}" ] || \
+                 [ -n "${DASHBOARD_TENANT_USERS:-}" ]; } && \
+               [ -z "${DASHBOARD_SECRET_KEY:-}" ]; then
+                error "启用 Dashboard 登录时必须设置稳定的 DASHBOARD_SECRET_KEY"
             fi
-
-            # PID 文件
+            if ! command -v gunicorn >/dev/null 2>&1; then
+                error "未安装 gunicorn，请重新运行且不要使用 --skip-deps"
+            fi
             PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
-
-            # 强制清理旧进程
-            info "清理旧进程..."
-
-            # 清理 PID 文件中的进程
-            if [ -f "$PID_FILE" ]; then
-                source "$PID_FILE"
-                kill $DASHBOARD_PID 2>/dev/null || true
-                kill $REALTIME_PID 2>/dev/null || true
-                rm -f "$PID_FILE"
+            stop_managed_services
+            if port_8050_in_use; then
+                error "端口 8050 已被非托管进程占用，请先确认该进程后再启动"
             fi
+            info "迁移租户配置与任务队列表..."
+            python3 -m fake_cdn tenant-migrate \
+                --config "$PROJECT_ROOT/config.json" --config-db "$CONFIG_DB"
 
-            # 清理端口占用
-            lsof -ti:8050 | xargs -r kill -9 2>/dev/null || true
-
-            # 清理 fake_cdn 进程
-            pkill -9 -f "fake_cdn" 2>/dev/null || true
-
-            sleep 1
-            success "旧进程已清理"
-
-            # 启动 dashboard
+            export FAKE_CDN_CONFIG_PATH="$PROJECT_ROOT/config.json"
+            export FAKE_CDN_CONFIG_DB_PATH="$CONFIG_DB"
+            export FAKE_CDN_DB_PATH="${FAKE_CDN_DB_PATH:-$PROJECT_ROOT/output/cdn_logs.db}"
+            export FAKE_CDN_PROJECT_ROOT="$PROJECT_ROOT"
             info "后台启动仪表板 (端口 8050)..."
-            nohup python3 -m fake_cdn dashboard \
-                --config "$PROJECT_ROOT/config.json" --config-db "$CONFIG_DB" \
+            nohup gunicorn --bind 0.0.0.0:8050 --workers 2 --threads 2 \
+                --timeout 120 --preload fake_cdn.dashboard.wsgi:application \
                 > "$PROJECT_ROOT/output/dashboard.log" 2>&1 &
             DASHBOARD_PID=$!
             sleep 2
-
-            if kill -0 $DASHBOARD_PID 2>/dev/null; then
+            if kill -0 "$DASHBOARD_PID" 2>/dev/null; then
                 success "仪表板已启动 (PID: $DASHBOARD_PID)"
                 echo -e "  访问地址: ${GREEN}http://localhost:8050${NC}"
                 echo -e "  日志文件: output/dashboard.log"
@@ -568,68 +721,33 @@ Percentile95Validator.print_report(result)
                 error "仪表板启动失败，查看 output/dashboard.log"
             fi
 
-            # 启动 realtime
-            echo ""
-            info "后台启动实时推送..."
-            # 传递环境变量到后台进程
-            nohup env CDN_API_ENDPOINT="$CDN_API_ENDPOINT" CDN_API_VIP="$CDN_API_VIP" \
-                python3 -u -m fake_cdn realtime "${TENANT_ARGS[@]}" -y \
-                > "$PROJECT_ROOT/output/realtime.log" 2>&1 &
-            REALTIME_PID=$!
+            info "后台启动任务 Worker..."
+            nohup python3 -u -m fake_cdn worker --config-db "$CONFIG_DB" \
+                > "$PROJECT_ROOT/output/worker.log" 2>&1 &
+            WORKER_PID=$!
             sleep 2
-
-            if kill -0 $REALTIME_PID 2>/dev/null; then
-                success "实时推送已启动 (PID: $REALTIME_PID)"
-                echo -e "  日志文件: output/realtime.log"
+            if kill -0 "$WORKER_PID" 2>/dev/null; then
+                success "任务 Worker 已启动 (PID: $WORKER_PID)"
+                echo -e "  日志文件: output/worker.log"
             else
-                error "实时推送启动失败，查看 output/realtime.log"
+                kill "$DASHBOARD_PID" 2>/dev/null || true
+                error "任务 Worker 启动失败，查看 output/worker.log"
             fi
-
-            # 保存 PID
             echo "DASHBOARD_PID=$DASHBOARD_PID" > "$PID_FILE"
-            echo "REALTIME_PID=$REALTIME_PID" >> "$PID_FILE"
-
+            echo "WORKER_PID=$WORKER_PID" >> "$PID_FILE"
             echo ""
             success "所有服务已在后台启动!"
             echo ""
             echo -e "  仪表板: ${GREEN}http://localhost:8050${NC}"
             echo -e "  停止服务: ${YELLOW}$0 stop${NC}"
-            echo -e "  查看日志: tail -f output/realtime.log"
+            echo -e "  查看日志: tail -f output/worker.log"
             ;;
-        8|stop)
-            PID_FILE="$PROJECT_ROOT/.fake-cdn.pid"
+        9|stop)
             info "停止服务..."
-
-            # 从 PID 文件停止
-            if [ -f "$PID_FILE" ]; then
-                source "$PID_FILE"
-
-                if [ -n "$DASHBOARD_PID" ] && kill -0 $DASHBOARD_PID 2>/dev/null; then
-                    kill $DASHBOARD_PID 2>/dev/null
-                    success "仪表板已停止 (PID: $DASHBOARD_PID)"
-                fi
-
-                if [ -n "$REALTIME_PID" ] && kill -0 $REALTIME_PID 2>/dev/null; then
-                    kill $REALTIME_PID 2>/dev/null
-                    success "实时推送已停止 (PID: $REALTIME_PID)"
-                fi
-
-                rm -f "$PID_FILE"
-            fi
-
-            # 清理占用端口 8050 的进程 (dashboard)
-            PORT_PID=$(lsof -ti:8050 2>/dev/null || true)
-            if [ -n "$PORT_PID" ]; then
-                kill $PORT_PID 2>/dev/null
-                success "清理端口 8050 占用进程 (PID: $PORT_PID)"
-            fi
-
-            # 清理 fake_cdn 相关进程
-            pkill -f "fake_cdn" 2>/dev/null && success "清理 fake_cdn 相关进程" || true
-
-            success "所有服务已停止"
+            stop_managed_services
+            success "托管的 Dashboard 与 Worker 已停止"
             ;;
-        9|config)
+        10|config)
             configure_api
             ;;
         0|exit)

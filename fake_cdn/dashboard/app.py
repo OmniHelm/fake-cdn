@@ -34,6 +34,7 @@ from .config_page import (
     create_config_page,
     register_config_callbacks,
 )
+from .job_page import create_job_page, register_job_callbacks
 from .tenant_admin import (
     create_tenant_list_page,
     create_version_panel,
@@ -986,6 +987,36 @@ INDEX_STRING = """
                 .time-range-bar { flex-wrap: wrap; }
                 .filter-bar { flex-direction: column; align-items: stretch; }
             }
+            @media (max-width: 480px) {
+                .topbar {
+                    height: auto;
+                    min-height: 56px;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    padding: 8px 16px;
+                }
+                .topbar-breadcrumb {
+                    flex: 1 1 100%;
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+                .topbar-info,
+                .topbar-refresh,
+                .topbar-account { display: none; }
+                .topbar-right {
+                    width: 100%;
+                    flex: 1 1 100%;
+                    min-width: 0;
+                    justify-content: flex-end;
+                    gap: 8px;
+                    margin-left: 0;
+                }
+                .tenant-context,
+                .tenant-context-fixed { min-width: 0; }
+                .tenant-switcher { width: 145px; }
+                .topbar-logout { padding: 6px 10px; font-size: 12px; }
+            }
 
             /* ===== 页面通用 ===== */
             .page-header {
@@ -1425,6 +1456,7 @@ PAGE_TITLES = {
     "/report": "月度报告",
     "/config": "配置管理",
     "/config-audit": "审计日志",
+    "/jobs": "任务中心",
     "/domains": "域名管理",
     "/dns": "DNS 记录",
     "/cache": "缓存",
@@ -1444,12 +1476,13 @@ def create_sidebar(current_path="/overview", tenant_id=None, is_admin=True):
         current_path = "/overview"
 
     def nav_item(icon, label, href):
-        resolved_href = (
-            f"/tenants/{tenant_id}{href}"
-            if tenant_id and href not in {"/config", "/config-audit"}
-            else href
+        global_path = href.startswith(("/config", "/admin"))
+        resolved_href = f"/tenants/{tenant_id}{href}" if tenant_id and not global_path else href
+        active = (
+            current_path == resolved_href
+            or current_path == href
+            or (href == "/admin/jobs" and current_path.startswith("/admin/jobs"))
         )
-        active = current_path == resolved_href or current_path == href
         cls = "sidebar-item active" if active else "sidebar-item"
         return dcc.Link(
             [
@@ -1470,6 +1503,7 @@ def create_sidebar(current_path="/overview", tenant_id=None, is_admin=True):
     admin_items = [
         html.Div("配置中心", className="sidebar-section"),
         nav_item("assignment", "配置管理", "/config"),
+        nav_item("play_circle", "任务中心", "/admin/jobs"),
         nav_item("history", "审计日志", "/config-audit"),
         html.Div("CDN 功能", className="sidebar-section"),
         nav_item("dns", "DNS 记录", "/dns"),
@@ -1518,9 +1552,12 @@ def create_topbar(
 ):
     """创建顶部信息栏"""
     page_key = "/" + current_path.rstrip("/").split("/")[-1]
-    page_title = PAGE_TITLES.get(
-        page_key, "租户配置" if "/config/tenants/" in current_path else "概览"
-    )
+    if current_path.startswith("/admin/jobs"):
+        page_title = "任务中心"
+    else:
+        page_title = PAGE_TITLES.get(
+            page_key, "租户配置" if "/config/tenants/" in current_path else "概览"
+        )
 
     if is_admin:
         tenant_control = html.Div(
@@ -3480,6 +3517,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
     # 配置管理页面回调独立注册，避免继续膨胀主数据回调。
     register_config_callbacks(app, config_manager)
     register_tenant_callbacks(app, config_manager)
+    register_job_callbacks(app, config_manager)
 
     # 注册回调 - 主数据更新
     @app.callback(
@@ -3980,6 +4018,8 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         if len(parts) >= 3 and parts[0] == "config" and parts[1] == "tenants":
             suffix = "/audit" if len(parts) > 3 and parts[3] == "audit" else ""
             return f"/config/tenants/{tenant_id}{suffix}"
+        if (pathname or "").startswith("/admin/jobs"):
+            return f"/admin/jobs/{tenant_id}"
         return f"/tenants/{tenant_id}/overview"
 
     @app.callback(
@@ -3998,7 +4038,7 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
         tenant_id = resolve_tenant_scope(default_tenant_id)
         tenant_ids = {item["tenant_id"] for item in config_manager.list_tenants()}
 
-        if not admin_access and (pathname.startswith("/config") or pathname == "/config-audit"):
+        if not admin_access and pathname.startswith(("/config", "/admin")):
             page = html.Div(
                 [
                     create_page_header(
@@ -4017,6 +4057,12 @@ def create_app(data_file=None, config_path=None, config_db_path=None):
             page = create_tenant_list_page(config_manager)
         elif pathname == "/config-audit":
             page = create_config_audit_page(config_manager)
+        elif pathname.startswith("/admin/jobs"):
+            parts = pathname.strip("/").split("/")
+            initial_tenant_id = parts[2] if len(parts) > 2 else None
+            if initial_tenant_id in tenant_ids:
+                tenant_id = initial_tenant_id
+            page = create_job_page(config_manager, initial_tenant_id)
         else:
             parts = pathname.strip("/").split("/")
             if len(parts) >= 3 and parts[0] == "config" and parts[1] == "tenants":

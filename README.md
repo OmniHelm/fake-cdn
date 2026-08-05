@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/depl
 ```
 
 脚本会自动完成:
-- 克隆项目到 `~/fake-cdn`
+- 克隆项目到 `/opt/fake-cdn`
 - 检查 Python 环境 (需要 3.8+)
 - 创建虚拟环境
 - 安装依赖
@@ -46,9 +46,11 @@ curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/depl
   3) catchup     - 追赶模式 (补推历史数据)
   4) validate    - 验证模式 (验证生成的日志)
   5) dashboard   - 启动仪表板 (可视化监控)
-  6) status      - 查看状态
-  7) full        - 完整模式 (realtime + dashboard 后台启动)
-  8) stop        - 停止后台服务
+  6) worker      - 管理员任务队列 Worker
+  7) status      - 查看状态
+  8) full        - 完整模式 (dashboard + worker 后台启动)
+  9) stop        - 停止后台服务
+ 10) config      - 配置 API 推送
   0) exit        - 退出
 ```
 
@@ -60,8 +62,8 @@ curl -fsSL https://raw.githubusercontent.com/OmniHelm/fake-cdn/main/scripts/depl
 # 生成模拟数据
 ./scripts/deploy.sh simulation
 
-# 后台启动指定租户的 realtime + dashboard
-./scripts/deploy.sh --tenant-id LITTLEHCCL full
+# 后台启动管理后台和任务 Worker；具体租户、模式和时间在任务中心提交
+./scripts/deploy.sh full
 
 # 停止后台服务
 ./scripts/deploy.sh stop
@@ -142,8 +144,53 @@ python -m fake_cdn catchup --tenant-id hccl --start-date 2026-03-01 --end-date 2
 每个任务写入 `output/tenants/{tenant_id}/jobs/{job_id}/`，日志同时记录
 `tenant_id`、`config_version_id` 和 `generation_job_id`，便于追溯。
 
-配置保存不会自动生成数据或调用 CDN API。即使保存了推送模式，实际执行时仍需
-通过 CLI 的安全确认。对外提供仪表板时，可使用现有的单管理员登录，不需要额外
+### 管理员任务中心
+
+配置保存、发布和回滚不会直接生成数据。配置中心的执行入口是管理员专用的
+`/admin/jobs` 页面：管理员选择租户、任务模式和时间窗口后，系统将任务写入
+SQLite 队列；独立 Worker 领取任务并执行固定的已发布版本。任务中心提供：
+
+1. 全量任务状态、租户和模式筛选，以及执行日志和统计详情。
+2. 模拟、历史补推、实时三种模式的参数校验；补推时间必须在版本窗口内并按粒度对齐。
+3. 每个租户同一时间最多一个活动任务，重复提交会被幂等拒绝。
+4. 排队取消、运行中停止、失败重试和 Worker 重启恢复；重试始终使用原配置版本。
+5. 真实推送配置必须输入租户 ID 二次确认；任务执行时才读取 `.env` 中的 API 环境变量。
+
+启动本地管理后台和 Worker：
+
+```bash
+python -m fake_cdn dashboard --config ./config.json --config-db output/config.db --port 8050
+python -m fake_cdn worker --config-db output/config.db
+```
+
+生产环境建议使用 `scripts/deploy.sh full` 或 systemd 单元，确保 Dashboard 与 Worker
+独立重启。Dashboard 通过 Gunicorn 的 `fake_cdn.dashboard.wsgi:application` 入口运行。
+
+### systemd 安装
+
+以下步骤只在目标主机初始化时执行一次。服务模板默认项目目录为 `/opt/fake-cdn`，
+运行用户为 `fake-cdn`：
+
+```bash
+sudo useradd --system --home /opt/fake-cdn --shell /usr/sbin/nologin fake-cdn
+sudo chown -R fake-cdn:fake-cdn /opt/fake-cdn
+sudo install -m 0644 deploy/systemd/fake-cdn-dashboard.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/fake-cdn-worker.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/fake-cdn.target /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fake-cdn.target
+```
+
+确认 `DASHBOARD_SECRET_KEY`、认证用户和 API 环境变量已写入 `/opt/fake-cdn/.env`，
+并保证 `output/` 对服务用户可写。查看状态与日志：
+
+```bash
+systemctl status fake-cdn-dashboard fake-cdn-worker
+journalctl -u fake-cdn-dashboard -u fake-cdn-worker -f
+```
+
+配置保存不会自动生成数据或调用 CDN API。实际执行必须通过管理员任务中心或 CLI，
+真实推送还需要二次确认。对外提供仪表板时，可使用现有的单管理员登录，不需要额外
 角色系统：
 
 ```bash
@@ -177,10 +224,15 @@ fake-cdn/
 │   │   ├── pusher.py        # HTTP 推送客户端
 │   │   ├── scheduler.py     # 调度器 (实时/补推)
 │   │   ├── storage.py       # SQLite 存储
-│   │   ├── tenant_config.py # Tenant 配置版本、审计与任务
+│   │   ├── tenant_config.py # Tenant 配置版本、审计与任务队列存储
+│   │   ├── job_service.py   # 任务校验、幂等、取消和重试
+│   │   ├── job_runner.py    # 固定版本执行器与心跳
 │   │   └── validator.py     # 95计费验证器
+│   ├── worker.py            # 独立任务 Worker
 │   └── dashboard/           # 可视化仪表板
-│       └── app.py           # Dash 应用
+│       ├── app.py           # Dash 应用与路由权限
+│       ├── job_page.py      # 管理员任务中心
+│       └── wsgi.py          # Gunicorn WSGI 入口
 │
 ├── scripts/                 # Shell 脚本
 │   ├── deploy.sh            # 一键部署 (推荐)
@@ -204,7 +256,8 @@ fake-cdn/
 | catchup | `./scripts/deploy.sh catchup` | 补推历史数据 |
 | validate | `./scripts/deploy.sh validate` | 验证日志是否符合目标 |
 | dashboard | `./scripts/deploy.sh dashboard` | 启动可视化仪表板 |
-| full | `./scripts/deploy.sh --tenant-id TENANT_ID full` | 后台启动指定租户 realtime + dashboard |
+| worker | `./scripts/deploy.sh worker` | 前台启动管理员任务 Worker |
+| full | `./scripts/deploy.sh full` | 后台启动 Dashboard + Worker |
 | stop | `./scripts/deploy.sh stop` | 停止后台服务 |
 | status | `./scripts/deploy.sh status` | 查看数据和服务状态 |
 

@@ -1,0 +1,7 @@
+[Unit]
+Description=Fake CDN dashboard and task worker
+Wants=fake-cdn-dashboard.service fake-cdn-worker.service
+After=fake-cdn-dashboard.service fake-cdn-worker.service
+
+[Install]
+WantedBy=multi-user.target

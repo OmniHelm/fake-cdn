@@ -20,14 +20,18 @@ from fake_cdn.core.generator import (
     decimal_pb,
     decimal_tb,
     get_output_dir,
-    normalize_config,
     parse_datetime_in_timezone,
     parse_timezone,
 )
+from fake_cdn.core.job_runner import (
+    apply_api_environment,
+    run_persisted_job,
+)
+from fake_cdn.core.job_service import JobService
 from fake_cdn.core.pusher import LocalSaver, LogPusher
 from fake_cdn.core.scheduler import CatchupScheduler, RealtimeScheduler
 from fake_cdn.core.storage import get_default_storage
-from fake_cdn.core.tenant_config import TenantConfigStore, get_default_config_store
+from fake_cdn.core.tenant_config import JOB_MODES, TenantConfigStore, get_default_config_store
 from fake_cdn.core.validator import (
     BillingCalculator,
     FluxWindowValidator,
@@ -53,21 +57,7 @@ def load_config(config_path: str = "./config.json") -> Dict:
         sys.exit(1)
 
 
-def apply_api_environment(config: Dict) -> Dict:
-    """在运行时覆盖敏感 API 参数，数据库中不持久化环境变量值。"""
-    config = deepcopy(config)
-    if os.environ.get("CDN_API_ENDPOINT"):
-        config.setdefault("api", {}).setdefault("headers", {})
-        config["api"]["endpoint"] = os.environ["CDN_API_ENDPOINT"]
-        print(f"[环境变量] API endpoint: {config['api']['endpoint']}")
-    if os.environ.get("CDN_API_VIP"):
-        config.setdefault("api", {}).setdefault("headers", {})
-        config["api"]["headers"]["vip"] = os.environ["CDN_API_VIP"]
-        print(f"[环境变量] API vip: {config['api']['headers']['vip']}")
-    return normalize_config(config)
-
-
-def load_tenant_config(args) -> Tuple[Dict, Optional[TenantConfigStore], Optional[str]]:
+def load_tenant_config(args) -> Tuple[Dict, Optional[TenantConfigStore], Optional[Dict]]:
     """优先从租户配置库读取已发布版本；未指定租户时保留文件兼容模式。"""
     if not args.tenant_id:
         print("[兼容模式] 未指定 --tenant-id，继续读取 config.json；建议迁移到配置数据库")
@@ -77,36 +67,12 @@ def load_tenant_config(args) -> Tuple[Dict, Optional[TenantConfigStore], Optiona
     store.bootstrap([args.config])
     snapshot = store.resolve_active(args.tenant_id)
     config = apply_api_environment(snapshot["config"])
-    if args.mode not in {"simulation", "realtime", "catchup"}:
-        config["_runtime"] = {
-            "tenant_id": args.tenant_id,
-            "config_version_id": snapshot["id"],
-            "config_checksum": snapshot["checksum"],
-        }
-        return config, store, None
-
-    job = store.create_job(
-        args.tenant_id,
-        snapshot["id"],
-        args.mode,
-        config.get("mode", {}).get("output_dir", "./output"),
-    )
-    config.setdefault("mode", {})["output_dir"] = job["output_dir"]
-    central_log_db = os.environ.get("FAKE_CDN_DB_PATH") or str(
-        Path(__file__).resolve().parent.parent / "output" / "cdn_logs.db"
-    )
     config["_runtime"] = {
         "tenant_id": args.tenant_id,
         "config_version_id": snapshot["id"],
         "config_checksum": snapshot["checksum"],
-        "generation_job_id": job["job_id"],
-        "log_db_path": central_log_db,
     }
-    print(
-        f"[租户配置] {args.tenant_id} · v{snapshot['version_no']} · "
-        f"{snapshot['checksum'][:12]} · {job['job_id']}"
-    )
-    return config, store, job["job_id"]
+    return config, store, snapshot
 
 
 def build_config_summary(config: Dict) -> Dict:
@@ -175,7 +141,7 @@ def ensure_push_confirmed(config: Dict, args) -> None:
     sys.exit(1)
 
 
-def mode_simulation(config: Dict, args) -> None:
+def mode_simulation(config: Dict, args) -> Dict:
     print("\n" + "=" * 72)
     print("模式: 模拟生成 (Simulation)")
     print("=" * 72 + "\n")
@@ -214,6 +180,7 @@ def mode_simulation(config: Dict, args) -> None:
         print("\n[跳过] dry_run=true，不真实推送到 API")
 
     print("\n[完成] 模拟生成完成!\n")
+    return stats
 
 
 def parse_realtime_end_datetime(raw_value: Optional[str], timezone_name: str) -> Optional[datetime]:
@@ -223,7 +190,7 @@ def parse_realtime_end_datetime(raw_value: Optional[str], timezone_name: str) ->
     return parse_datetime_in_timezone(raw_value, timezone)
 
 
-def mode_realtime(config: Dict, args) -> None:
+def mode_realtime(config: Dict, args) -> Dict:
     print("\n" + "=" * 72)
     print("模式: 实时推送 (Realtime)")
     print("=" * 72 + "\n")
@@ -236,9 +203,11 @@ def mode_realtime(config: Dict, args) -> None:
         print(f"[配置] 将在 {end_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')} 自动停止")
 
     if args.once:
-        scheduler.run_once(dry_run)
+        completed = scheduler.run_once(dry_run)
     else:
         scheduler.run_forever(dry_run, end_datetime=end_datetime)
+        completed = True
+    return {"completed": bool(completed), "once": bool(args.once)}
 
 
 def normalize_catchup_window(config: Dict, args) -> Tuple[Optional[str], Optional[str]]:
@@ -264,7 +233,7 @@ def normalize_catchup_window(config: Dict, args) -> Tuple[Optional[str], Optiona
     return start_datetime, end_datetime
 
 
-def mode_catchup(config: Dict, args) -> None:
+def mode_catchup(config: Dict, args) -> Dict:
     print("\n" + "=" * 72)
     print("模式: 补推历史数据 (Catchup)")
     print("=" * 72 + "\n")
@@ -278,6 +247,35 @@ def mode_catchup(config: Dict, args) -> None:
     print(f"  总流量: {stats['actual_total_flux_pb']:.4f} PB")
     print(f"  等效平均带宽: {stats['equivalent_avg_gbps']:.2f} Gbps")
     print(f"  工作日 / 周末: {stats['weekday_avg_tb']:.2f} / {stats['weekend_avg_tb']:.2f} TB/天")
+    return stats
+
+
+def execute_runtime_mode(mode: str, config: Dict, args) -> Dict:
+    """执行可生成数据的模式，供 CLI 与 Worker 共用。"""
+    if mode == "simulation":
+        return mode_simulation(config, args)
+    if mode == "realtime":
+        return mode_realtime(config, args)
+    if mode == "catchup":
+        return mode_catchup(config, args)
+    raise ValueError(f"不支持的执行模式: {mode}")
+
+
+def build_job_parameters(config: Dict, args) -> Dict:
+    parameters: Dict = {"force_dry_run": bool(args.dry_run)}
+    if args.mode == "catchup":
+        start_datetime, end_datetime = normalize_catchup_window(config, args)
+        parameters.update(
+            {
+                "start_datetime": start_datetime or config["time"]["start_datetime"],
+                "end_datetime": end_datetime or config["time"]["end_datetime"],
+            }
+        )
+    elif args.mode == "realtime":
+        parameters.update({"once": bool(args.once), "end_datetime": args.end_datetime})
+        if not parameters["end_datetime"]:
+            parameters.pop("end_datetime")
+    return parameters
 
 
 def mode_validate(config: Dict, args) -> None:
@@ -297,6 +295,36 @@ def mode_dashboard(config: Dict, args) -> None:
         config_path=args.config,
         config_db_path=args.config_db,
     )
+
+
+def mode_worker(args) -> None:
+    from fake_cdn.worker import run_worker
+
+    store = TenantConfigStore(args.config_db) if args.config_db else get_default_config_store()
+    run_worker(
+        str(store.db_path),
+        poll_interval=args.poll_interval,
+        once=args.once,
+        max_realtime=args.max_realtime,
+        max_batch=args.max_batch,
+    )
+
+
+def mode_run_job(args) -> None:
+    if not args.job_id:
+        print("[错误] run-job 模式必须提供 --job-id")
+        sys.exit(1)
+    store = TenantConfigStore(args.config_db) if args.config_db else get_default_config_store()
+    try:
+        worker_id = os.environ.get("FAKE_CDN_WORKER_ID", f"runner-{os.getpid()}")
+        job = run_persisted_job(store, args.job_id, worker_id=worker_id)
+    except Exception as exc:
+        print(f"[错误] 任务执行失败: {exc}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
+    print(f"[任务] {job['job_id']} / {job['status']}")
 
 
 def mode_tenant_migrate(args) -> None:
@@ -407,6 +435,7 @@ def main() -> None:
   catchup       补推指定时间窗口数据
   validate      校验已生成日志
   dashboard     启动可视化仪表板
+  worker        启动管理员任务队列 Worker
   migrate       将 JSONL 数据导入 SQLite
   tenant-migrate 将 config*.json 显式导入租户配置数据库
 
@@ -428,6 +457,8 @@ def main() -> None:
             "catchup",
             "validate",
             "dashboard",
+            "worker",
+            "run-job",
             "migrate",
             "tenant-migrate",
         ],
@@ -438,7 +469,15 @@ def main() -> None:
     )
     parser.add_argument("--tenant-id", help="从配置数据库加载该租户的已发布版本")
     parser.add_argument("--config-db", help="租户配置 SQLite 路径（默认: output/config.db）")
-    parser.add_argument("--once", action="store_true", help="实时模式下只执行一次")
+    parser.add_argument("--job-id", help="内部任务执行入口使用的任务 ID")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="实时模式只执行一次；Worker 模式处理完当前队列后退出",
+    )
+    parser.add_argument("--poll-interval", type=float, default=1.0, help="Worker 队列轮询间隔秒数")
+    parser.add_argument("--max-realtime", type=int, default=1, help="Worker 实时任务槽位")
+    parser.add_argument("--max-batch", type=int, default=1, help="Worker 批量任务槽位")
     parser.add_argument(
         "--start-datetime", help="补推模式: 开始时间 (YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DDTHH:MM:SS)"
     )
@@ -460,6 +499,12 @@ def main() -> None:
     if args.mode == "dashboard":
         mode_dashboard({}, args)
         return
+    if args.mode == "worker":
+        mode_worker(args)
+        return
+    if args.mode == "run-job":
+        mode_run_job(args)
+        return
     if args.mode == "migrate":
         mode_migrate({}, args)
         return
@@ -467,33 +512,50 @@ def main() -> None:
         mode_tenant_migrate(args)
         return
 
-    config, config_store, job_id = load_tenant_config(args)
+    config, config_store, snapshot = load_tenant_config(args)
     if args.dry_run:
         config = deepcopy(config)
         config["mode"]["dry_run"] = True
 
     print_config_summary(config)
-    ensure_push_confirmed(config, args)
+    if args.mode in JOB_MODES:
+        ensure_push_confirmed(config, args)
+
+    if config_store and snapshot and args.mode in JOB_MODES:
+        try:
+            parameters = build_job_parameters(config, args)
+            cli_worker_id = f"cli-{os.getpid()}"
+            job = JobService(config_store).create_from_snapshot(
+                snapshot,
+                args.mode,
+                parameters,
+                actor="cli",
+                status="running",
+                push_confirmed=not config["mode"].get("dry_run", True),
+                worker_id=cli_worker_id,
+            )
+            print(
+                f"[租户配置] {job['tenant_id']} · v{job['version_no']} · "
+                f"{job['config_checksum'][:12]} · {job['job_id']}"
+            )
+            run_persisted_job(config_store, job["job_id"], worker_id=cli_worker_id)
+            return
+        except Exception as exc:
+            print(f"\n[错误] {exc}")
+            import traceback
+
+            traceback.print_exc()
+            sys.exit(1)
 
     try:
-        if args.mode == "simulation":
-            mode_simulation(config, args)
-        elif args.mode == "realtime":
-            mode_realtime(config, args)
-        elif args.mode == "catchup":
-            mode_catchup(config, args)
+        if args.mode in JOB_MODES:
+            execute_runtime_mode(args.mode, config, args)
         elif args.mode == "validate":
             mode_validate(config, args)
-        if config_store and job_id:
-            config_store.finish_job(job_id, "succeeded")
     except KeyboardInterrupt:
-        if config_store and job_id:
-            config_store.finish_job(job_id, "cancelled")
         print("\n\n[中断] 用户中断执行")
         sys.exit(0)
     except Exception as exc:
-        if config_store and job_id:
-            config_store.finish_job(job_id, "failed", {"error": str(exc)})
         print(f"\n[错误] {exc}")
         import traceback
 

@@ -20,6 +20,7 @@ class CDNLogStorage:
     def _init_db(self):
         """初始化数据库"""
         with self._get_conn() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
             self._create_tables(conn)
             self._migrate_project_column(conn)
 
@@ -58,8 +59,9 @@ class CDNLogStorage:
     @contextmanager
     def _get_conn(self):
         """获取数据库连接"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
         try:
             yield conn
             conn.commit()

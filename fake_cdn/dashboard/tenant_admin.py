@@ -298,6 +298,18 @@ def create_version_panel(store: TenantConfigStore, tenant_id: str):
                         n_clicks=0,
                         disabled=not rollback_options,
                     ),
+                    html.A(
+                        [
+                            html.Span(
+                                "play_circle",
+                                className="material-symbols-outlined",
+                                **{"aria-hidden": "true"},
+                            ),
+                            html.Span("创建任务"),
+                        ],
+                        href=f"/admin/jobs/{tenant_id}",
+                        className="config-button primary",
+                    ),
                 ],
                 className="tenant-version-actions",
             ),

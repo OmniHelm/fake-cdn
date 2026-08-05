@@ -4,5 +4,6 @@ backports-zoneinfo>=0.2.1; python_version < "3.9"
 
 # Dashboard dependencies
 dash>=2.14.0
+gunicorn>=22.0.0; platform_system != "Windows"
 plotly>=5.18.0
 pandas>=2.0.0
