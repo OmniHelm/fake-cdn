@@ -44,10 +44,13 @@ def test_admin_job_page_contains_filters_actions_and_confirmations(tmp_path: Pat
         "jobs-retry",
         "jobs-retry-confirmation",
         "jobs-detail",
+        "jobs-refresh-interval",
+        "jobs-view-revision",
     }
     assert expected_ids <= set(by_id)
     assert by_id["jobs-create-tenant"].value == "tenant-a"
     assert by_id["jobs-tenant-filter"].value == "tenant-a"
+    assert by_id["jobs-refresh-interval"].interval == 5000
     assert by_id["jobs-create-modal"].className == "jobs-modal-backdrop hidden"
 
 

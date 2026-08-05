@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Dict, List, Optional
 
 import dash
@@ -95,6 +96,33 @@ def _summary_strip(counts: Dict[str, int]):
         )
         for label, value in items
     ]
+
+
+def _view_revision(jobs, counts, online, filters):
+    """生成任务列表可见状态摘要，避免轮询时重复渲染相同内容。"""
+    active = any(job["status"] in JOB_ACTIVE_STATUSES for job in jobs)
+    payload = {
+        "filters": filters,
+        "online": online,
+        "counts": counts,
+        "active_bucket": (int(datetime.now(tz=timezone.utc).timestamp() // 5) if active else None),
+        "jobs": [
+            [
+                job.get("job_id"),
+                job.get("tenant_id"),
+                job.get("version_no"),
+                job.get("mode"),
+                job.get("status"),
+                job.get("created_by"),
+                job.get("created_at"),
+                job.get("started_at"),
+                job.get("finished_at"),
+            ]
+            for job in jobs
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _snapshot_preview(store: TenantConfigStore, tenant_id: Optional[str]):
@@ -234,9 +262,10 @@ def create_job_page(store: TenantConfigStore, initial_tenant_id: Optional[str] =
     initial_filter = selected_tenant if initial_tenant_id in tenant_values else ""
     return html.Div(
         [
-            dcc.Interval(id="jobs-refresh-interval", interval=3000, n_intervals=0),
+            dcc.Interval(id="jobs-refresh-interval", interval=5000, n_intervals=0),
             dcc.Store(id="jobs-create-token", data=0),
             dcc.Store(id="jobs-action-token", data=0),
+            dcc.Store(id="jobs-view-revision"),
             dcc.Store(id="jobs-selected-id"),
             html.Div(
                 [
@@ -552,6 +581,7 @@ def register_job_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
             Output("jobs-summary", "children"),
             Output("jobs-worker-status", "children"),
             Output("jobs-worker-status", "className"),
+            Output("jobs-view-revision", "data"),
         ],
         [
             Input("jobs-refresh-interval", "n_intervals"),
@@ -561,10 +591,17 @@ def register_job_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
             Input("jobs-mode-filter", "value"),
             Input("jobs-status-filter", "value"),
         ],
+        [State("jobs-view-revision", "data")],
     )
-    def refresh_jobs(_interval, _created, _action, tenant_id, mode, status):
+    def refresh_jobs(_interval, _created, _action, tenant_id, mode, status, current_revision):
         if not is_admin_session():
-            return [], [], [_icon("lock"), html.Span("无权限")], "jobs-worker-status offline"
+            return (
+                [],
+                [],
+                [_icon("lock"), html.Span("无权限")],
+                "jobs-worker-status offline",
+                "unauthorized",
+            )
         jobs = store.list_jobs(
             tenant_id=tenant_id or None,
             mode=mode or None,
@@ -572,9 +609,13 @@ def register_job_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
             limit=500,
         )
         online = service.worker_online()
+        counts = service.counts()
+        revision = _view_revision(jobs, counts, online, [tenant_id, mode, status])
+        if dash.ctx.triggered_id == "jobs-refresh-interval" and revision == current_revision:
+            return (dash.no_update,) * 5
         worker_status = [_icon("memory"), html.Span("Worker 在线" if online else "Worker 离线")]
         worker_class = f"jobs-worker-status {'online' if online else 'offline'}"
-        return _job_rows(jobs), _summary_strip(service.counts()), worker_status, worker_class
+        return _job_rows(jobs), _summary_strip(counts), worker_status, worker_class, revision
 
     @app.callback(
         [
@@ -733,6 +774,8 @@ def register_job_callbacks(app: dash.Dash, store: TenantConfigStore) -> None:
     )
     def show_job_detail(selected_ids, _rows, _interval):
         if not is_admin_session() or not selected_ids:
+            if is_admin_session() and dash.ctx.triggered_id == "jobs-refresh-interval":
+                raise PreventUpdate
             return None, _job_detail(store, None), True, True, "jobs-retry-confirm hidden"
         job_id = selected_ids[0]
         try:

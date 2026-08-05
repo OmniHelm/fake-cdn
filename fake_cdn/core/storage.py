@@ -190,7 +190,6 @@ class CDNLogStorage:
         self, project: Optional[str] = None, tenant_id: Optional[str] = None
     ) -> Tuple[Optional[int], Optional[int]]:
         """获取数据时间范围"""
-        query = "SELECT MIN(start_time) as min_time, MAX(start_time) as max_time FROM cdn_logs"
         params = []
         where = []
         if tenant_id:
@@ -199,14 +198,22 @@ class CDNLogStorage:
         if project:
             where.append("project = ?")
             params.append(project)
-        if where:
-            query += " WHERE " + " AND ".join(where)
+
+        # 使用排序索引读取边界，避免 MIN/MAX 扫描整个数据集或租户数据集。
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
         with self._get_conn() as conn:
-            cursor = conn.execute(query, params)
-            row = cursor.fetchone()
-            if row:
-                return row["min_time"], row["max_time"]
-            return None, None
+            min_row = conn.execute(
+                f"SELECT start_time FROM cdn_logs{where_sql} " "ORDER BY start_time ASC LIMIT 1",
+                params,
+            ).fetchone()
+            max_row = conn.execute(
+                f"SELECT start_time FROM cdn_logs{where_sql} " "ORDER BY start_time DESC LIMIT 1",
+                params,
+            ).fetchone()
+        return (
+            min_row["start_time"] if min_row else None,
+            max_row["start_time"] if max_row else None,
+        )
 
     def get_domains(
         self, project: Optional[str] = None, tenant_id: Optional[str] = None
